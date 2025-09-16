@@ -106,6 +106,13 @@ export function ZGServiceDiscovery() {
                     </Alert>
                 )}
 
+                {!error && services.length === 0 && !isLoading && (
+                    <Alert className="mb-4">
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertDescription>Initializing 0G Compute services...</AlertDescription>
+                    </Alert>
+                )}
+
                 {/* Search and Filters */}
                 <div className="space-y-4 mb-6">
                     <div className="flex gap-2">
@@ -198,16 +205,31 @@ export function ZGServiceDiscovery() {
                                             </div>
                                         </div>
 
-                                        <Button
-                                            variant={selectedService?.provider === service.provider ? "default" : "outline"}
-                                            size="sm"
-                                            onClick={(e) => {
-                                                e.stopPropagation()
-                                                selectService(service)
-                                            }}
-                                        >
-                                            {selectedService?.provider === service.provider ? "Selected" : "Select"}
-                                        </Button>
+                                        <div className="flex gap-2">
+                                            <Button
+                                                variant={selectedService?.provider === service.provider ? "default" : "outline"}
+                                                size="sm"
+                                                onClick={(e) => {
+                                                    e.stopPropagation()
+                                                    selectService(service)
+                                                }}
+                                            >
+                                                {selectedService?.provider === service.provider ? "Selected" : "Select"}
+                                            </Button>
+                                            {selectedService?.provider === service.provider && (
+                                                <Button
+                                                    variant="default"
+                                                    size="sm"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation()
+                                                        window.location.href = '/chat'
+                                                    }}
+                                                    className="bg-green-600 hover:bg-green-700"
+                                                >
+                                                    Start Chat
+                                                </Button>
+                                            )}
+                                        </div>
                                     </div>
                                 </CardContent>
                             </Card>

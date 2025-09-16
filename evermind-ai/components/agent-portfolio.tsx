@@ -108,7 +108,10 @@ export function AgentPortfolio() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem className="gap-2">
+                  <DropdownMenuItem
+                    className="gap-2"
+                    onClick={() => window.location.href = '/chat'}
+                  >
                     <MessageSquare className="h-4 w-4" />
                     Chat with Agent
                   </DropdownMenuItem>
@@ -166,7 +169,11 @@ export function AgentPortfolio() {
 
             {/* Actions */}
             <div className="flex gap-2">
-              <Button size="sm" className="flex-1 gap-1">
+              <Button
+                size="sm"
+                className="flex-1 gap-1"
+                onClick={() => window.location.href = '/chat'}
+              >
                 <MessageSquare className="h-3 w-3" />
                 Chat
               </Button>

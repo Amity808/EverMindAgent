@@ -5,7 +5,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { WalletConnectButton } from "@/components/wallet-connect-button"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { Brain, Menu, X, Zap, Users, Coins, Store } from "lucide-react"
+import { Brain, Menu, X, Zap, Users, Coins, Store, BookOpen } from "lucide-react"
 import { NotificationCenter } from "@/components/notifications"
 import { SearchCommand } from "@/components/search-command"
 
@@ -15,6 +15,7 @@ export function Navigation() {
   const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: Brain },
     { href: "/chat", label: "AI Chat", icon: Zap },
+    { href: "/research", label: "Research", icon: BookOpen },
     { href: "/collaboration", label: "Collaborate", icon: Users },
     { href: "/credits", label: "Credits", icon: Coins },
     { href: "/marketplace", label: "Marketplace", icon: Store },

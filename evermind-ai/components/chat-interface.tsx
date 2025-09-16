@@ -61,7 +61,7 @@ export function ChatInterface() {
   }, [messages])
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || !selectedService || !isConnected || !isInitialized) return
+    if (!inputValue.trim() || !selectedService || !isInitialized) return
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -167,15 +167,19 @@ export function ChatInterface() {
     setUploadedFiles((prev) => prev.filter((_, i) => i !== index))
   }
 
-  if (!isConnected) {
+  // Show demo mode if not connected but initialized
+  if (!isConnected && !isInitialized) {
     return (
       <div className="container px-4 py-8">
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Brain className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">Connect Your Wallet</h3>
-            <p className="text-muted-foreground text-center">
+            <p className="text-muted-foreground text-center mb-4">
               Please connect your wallet to start chatting with AI agents on the 0G Network
+            </p>
+            <p className="text-sm text-muted-foreground text-center">
+              The chat interface will work in demo mode once the page loads
             </p>
           </CardContent>
         </Card>
@@ -341,6 +345,11 @@ export function ChatInterface() {
                 <CardTitle className="flex items-center gap-2">
                   <Brain className="h-5 w-5" />
                   0G AI Chat Interface
+                  {!isConnected && (
+                    <Badge variant="secondary" className="text-xs">
+                      Demo Mode
+                    </Badge>
+                  )}
                 </CardTitle>
                 {selectedService && (
                   <div className="flex items-center gap-2">

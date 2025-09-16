@@ -133,7 +133,6 @@ export function useWeb3() {
   return context
 }
 
-// Extend Window interface for TypeScript
 declare global {
   interface Window {
     ethereum?: any
