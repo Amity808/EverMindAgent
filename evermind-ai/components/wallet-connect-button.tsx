@@ -16,7 +16,7 @@ export function WalletConnectButton() {
     switch (chainId) {
       case 1:
         return "Ethereum"
-      case 1337:
+      case 16602:
         return "0G Network"
       case 11155111:
         return "Sepolia"

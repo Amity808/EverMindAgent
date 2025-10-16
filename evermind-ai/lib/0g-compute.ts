@@ -1,5 +1,7 @@
 
-import { ethers } from 'ethers'
+import { ethers, BrowserProvider } from 'ethers'
+import { createZGComputeNetworkBroker } from '@0glabs/0g-serving-broker'
+import OpenAI from 'openai'
 
 export interface ServiceInfo {
     provider: string
@@ -44,32 +46,87 @@ export interface AccountBalance {
 }
 
 class ZGComputeService {
-    private provider: ethers.BrowserProvider | null = null
+    private provider: BrowserProvider | null = null
     private signer: ethers.JsonRpcSigner | null = null
+    private broker: any = null
     private isInitialized = false
-    private rpcUrl: string
-    private indexerRpc: string
 
     constructor() {
-        this.rpcUrl = process.env.NEXT_PUBLIC_0G_RPC_URL || 'https://evmrpc-testnet.0g.ai/'
-        this.indexerRpc = process.env.NEXT_PUBLIC_0G_INDEXER_RPC || 'https://indexer-storage-testnet-standard.0g.ai'
+        // Initialize in browser environment
+        if (typeof window !== "undefined" && typeof window.ethereum === "undefined") {
+            console.warn("MetaMask not detected. 0G Compute will work in demo mode only.")
+        }
     }
 
-    async initialize(provider: ethers.BrowserProvider | null, signer: ethers.JsonRpcSigner | null) {
+    async initialize(provider: BrowserProvider | null, signer: ethers.JsonRpcSigner | null) {
         try {
-            this.provider = provider
-            this.signer = signer
-            this.isInitialized = true
+            if (typeof window !== "undefined" && window.ethereum) {
+                // Switch to 0G Testnet
+                await this.switchTo0GTestnet()
 
-            if (provider && signer) {
-                console.log('0G Compute service initialized successfully with user wallet')
+                // Wait a moment for network switch to complete
+                await new Promise(resolve => setTimeout(resolve, 1000))
+
+                // Create provider and broker
+                this.provider = new BrowserProvider(window.ethereum)
+                this.signer = await this.provider.getSigner()
+
+                this.broker = await createZGComputeNetworkBroker(this.signer)
+                this.isInitialized = true
+
+                console.log('0G Compute service initialized successfully with broker')
+                return true
             } else {
                 console.log('0G Compute service initialized in demo mode')
+                this.isInitialized = true
+                return true
             }
-            return true
         } catch (error) {
             console.error('Failed to initialize 0G Compute service:', error)
             throw new Error(`Failed to initialize 0G Compute service: ${error}`)
+        }
+    }
+
+    private async switchTo0GTestnet() {
+        try {
+            // First, try to switch to the existing network
+            await window.ethereum.request({
+                method: 'wallet_switchEthereumChain',
+                params: [{ chainId: '0x40da' }],
+            })
+            console.log("✅ Successfully switched to 0G Testnet")
+        } catch (error: any) {
+            console.log("Network switch error:", error)
+
+            // If the network doesn't exist, try to add it
+            if (error.code === 4902) {
+                try {
+                    await window.ethereum.request({
+                        method: 'wallet_addEthereumChain',
+                        params: [{
+                            chainId: '0x40da', // 16602 in decimal
+                            chainName: '0G Testnet',
+                            rpcUrls: ['https://evmrpc-testnet.0g.ai'],
+                            blockExplorerUrls: ['https://testnet.0g.ai'],
+                            nativeCurrency: {
+                                name: 'OG',
+                                symbol: 'OG',
+                                decimals: 18,
+                            },
+                        }],
+                    })
+                    console.log("✅ Successfully added 0G Testnet")
+                } catch (addError: any) {
+                    console.log("Failed to add network:", addError)
+                    if (addError.message?.includes('nativeCurrency.symbol does not match')) {
+                        console.log("⚠️ Network already exists with different symbol")
+                        console.log("Please manually switch to 0G Testnet in MetaMask")
+                    }
+                }
+            } else if (error.message?.includes('nativeCurrency.symbol does not match')) {
+                console.log("⚠️ Network already exists with different currency symbol")
+                console.log("Please manually switch to 0G Testnet in MetaMask")
+            }
         }
     }
 
@@ -89,12 +146,25 @@ class ZGComputeService {
         }
 
         try {
-            // For now, return the official services as the SDK is not browser-compatible
-            // In a real implementation, you would call the 0G Network API directly
-            return this.getOfficialServices()
+            if (this.broker) {
+                const services = await this.broker.inference.listService()
+                return services.map((service: any) => ({
+                    provider: service[0],
+                    serviceType: service[1],
+                    url: service[2],
+                    inputPrice: BigInt(service[3] || 0),
+                    outputPrice: BigInt(service[4] || 0),
+                    updatedAt: BigInt(service[5] || Date.now()),
+                    model: service[6],
+                    verifiability: service[7] || 'TeeML'
+                }))
+            } else {
+                // Return official services for demo mode
+                return this.getOfficialServices()
+            }
         } catch (error) {
             console.error('Failed to get available services:', error)
-            throw new Error(`Failed to get available services: ${error}`)
+            return this.getOfficialServices()
         }
     }
 
@@ -107,9 +177,12 @@ class ZGComputeService {
         }
 
         try {
-            // In a real implementation, you would call the 0G Network API to acknowledge the provider
-            // For now, we'll just log it as the SDK is not browser-compatible
-            console.log(`Provider ${providerAddress} acknowledged successfully (browser mode)`)
+            if (this.broker) {
+                await this.broker.inference.acknowledgeProviderSigner(providerAddress)
+                console.log(`Provider ${providerAddress} acknowledged successfully`)
+            } else {
+                console.log(`Provider ${providerAddress} acknowledged (demo mode)`)
+            }
         } catch (error) {
             console.error('Failed to acknowledge provider:', error)
             throw new Error(`Failed to acknowledge provider: ${error}`)
@@ -125,15 +198,19 @@ class ZGComputeService {
         }
 
         try {
-            // Find the service in our official services list
-            const service = this.getOfficialServices().find(s => s.provider === providerAddress)
-            if (!service) {
-                throw new Error(`Service not found for provider: ${providerAddress}`)
-            }
-
-            return {
-                endpoint: service.url,
-                model: service.model
+            if (this.broker) {
+                const { endpoint, model } = await this.broker.inference.getServiceMetadata(providerAddress)
+                return { endpoint, model }
+            } else {
+                // Find the service in our official services list
+                const service = this.getOfficialServices().find(s => s.provider === providerAddress)
+                if (!service) {
+                    throw new Error(`Service not found for provider: ${providerAddress}`)
+                }
+                return {
+                    endpoint: service.url,
+                    model: service.model
+                }
             }
         } catch (error) {
             console.error('Failed to get service metadata:', error)
@@ -144,17 +221,19 @@ class ZGComputeService {
     /**
      * Generate authenticated request headers for a service
      */
-    async getRequestHeaders(providerAddress: string, question: string): Promise<Record<string, string>> {
+    async getRequestHeaders(providerAddress: string, messages: string): Promise<Record<string, string>> {
         if (!this.isReady()) {
             throw new Error('0G Compute service not initialized')
         }
 
         try {
-            // In a real implementation, you would generate proper authentication headers
-            // For now, we'll return basic headers as the SDK is not browser-compatible
-            return {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${providerAddress}` // Placeholder
+            if (this.broker) {
+                return await this.broker.inference.getRequestHeaders(providerAddress, messages)
+            } else {
+                return {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${providerAddress}`
+                }
             }
         } catch (error) {
             console.error('Failed to get request headers:', error)
@@ -166,38 +245,150 @@ class ZGComputeService {
      * Send an inference request to a 0G Compute service
      */
     async sendInferenceRequest(
-        providerAddress: string,
-        request: InferenceRequest
+        content: string,
+        providerAddress: string
     ): Promise<InferenceResponse> {
         if (!this.isReady()) {
             throw new Error('0G Compute service not initialized')
         }
 
         try {
-            // For demo purposes, we'll simulate AI responses
-            // In a real implementation, you would call the actual 0G Compute API
-            const userMessage = request.messages.find(m => m.role === 'user')?.content || ''
+            if (this.broker) {
+                console.log("🤖 Making AI request...")
 
-            // Simulate processing time
-            await new Promise(resolve => setTimeout(resolve, 2000))
+                // First, get available services
+                const services = await this.broker.inference.listService()
+                console.log("📋 Available services:", services)
 
-            // Generate a mock AI response based on the user's message
-            const mockResponse = this.generateMockAIResponse(userMessage, providerAddress)
+                if (services.length === 0) {
+                    console.log("❌ No services available")
+                    throw new Error("No services available")
+                }
 
-            return {
-                choices: [
-                    {
-                        message: {
-                            role: 'assistant',
-                            content: mockResponse
-                        },
-                        finish_reason: 'stop'
+                // Find the specific provider
+                const service = services.find((s: any) => s[0] === providerAddress)
+                if (!service) {
+                    console.log("❌ Provider not found")
+                    throw new Error(`Provider ${providerAddress} not found`)
+                }
+
+                const endpoint = service[2] // Service URL
+                const model = service[6] // Model name
+
+                console.log(`🔄 Using provider: ${providerAddress}`)
+                console.log(`Endpoint: ${endpoint}`)
+                console.log(`Model: ${model}`)
+
+                try {
+                    // Acknowledge provider
+                    console.log("📝 Acknowledging provider...")
+                    await this.broker.inference.acknowledgeProviderSigner(providerAddress)
+
+                    // Get service metadata
+                    console.log("🔍 Getting service metadata...")
+                    const { endpoint: metaEndpoint, model: metaModel } = await this.broker.inference.getServiceMetadata(providerAddress)
+                    console.log(`Meta Endpoint: ${metaEndpoint}`)
+                    console.log(`Meta Model: ${metaModel}`)
+
+                    // Generate auth headers
+                    const messages = [{ role: "user" as const, content }]
+                    console.log("🔐 Generating auth headers...")
+                    const headers = await this.broker.inference.getRequestHeaders(providerAddress, JSON.stringify(messages))
+
+                    // Make the request using OpenAI SDK
+                    console.log("📤 Sending request to AI service...")
+                    console.log("Request details:")
+                    console.log("- Endpoint:", metaEndpoint)
+                    console.log("- Model:", metaModel)
+                    console.log("- Messages:", messages)
+                    console.log("- Headers:", headers)
+
+                    const openai = new OpenAI({
+                        baseURL: metaEndpoint,
+                        apiKey: "", // Empty string
+                        defaultHeaders: headers,
+                        dangerouslyAllowBrowser: true
+                    })
+
+                    const completion = await openai.chat.completions.create({
+                        messages: messages,
+                        model: metaModel,
+                    })
+
+                    const answer = completion.choices[0].message.content!
+                    const chatID = completion.id // Save for verification
+
+                    console.log("✅ AI Response:")
+                    console.log(`Question: ${content}`)
+                    console.log(`Answer: ${answer}`)
+                    console.log(`Chat ID: ${chatID}`)
+
+                    // Optional: Verify the response
+                    try {
+                        console.log("🔍 Verifying response...")
+                        const isValid = await this.broker.inference.processResponse(
+                            providerAddress,
+                            answer,
+                            chatID
+                        )
+                        console.log(`Response verification: ${isValid ? '✅ Valid' : '❌ Invalid'}`)
+                    } catch (verifyError) {
+                        console.log("⚠️ Verification failed:", verifyError)
                     }
-                ],
-                usage: {
-                    prompt_tokens: userMessage.length,
-                    completion_tokens: mockResponse.length,
-                    total_tokens: userMessage.length + mockResponse.length
+
+                    console.log("🎉 AI request completed successfully!")
+
+                    return {
+                        choices: [
+                            {
+                                message: {
+                                    role: 'assistant',
+                                    content: answer
+                                },
+                                finish_reason: 'stop'
+                            }
+                        ],
+                        usage: completion.usage
+                    }
+                } catch (providerError: any) {
+                    console.log(`❌ Provider failed:`, providerError.message)
+
+                    if (providerError.message?.includes('insufficient balance')) {
+                        console.log("💰 INSUFFICIENT BALANCE ERROR!")
+                        console.log("Your inference sub-account has no funds.")
+                        console.log("📝 SOLUTION: Transfer funds to inference sub-account first!")
+                        console.log("This will transfer 0.1 OG to your inference sub-account.")
+                        console.log("💡 You can use the 'Transfer to Inference' button in the Account Management tab.")
+                    } else if (providerError.message?.includes('ERR_TUNNEL_CONNECTION_FAILED') ||
+                        providerError.message?.includes('Failed to fetch')) {
+                        console.log("🔧 Network connectivity issue with this provider")
+                        console.log("The Phala network endpoints may be temporarily unavailable.")
+                        console.log("💡 Try again in a few minutes or use a different provider.")
+                    } else {
+                        console.log("🔧 Other error with this provider")
+                        console.log("💡 Check your network connection and try again.")
+                    }
+
+                    throw providerError
+                }
+            } else {
+                // Demo mode - generate mock response
+                const mockResponse = this.generateMockAIResponse(content, providerAddress)
+                return {
+                    choices: [
+                        {
+                            message: {
+                                role: 'assistant',
+                                content: mockResponse
+                            },
+                            finish_reason: 'stop'
+                        }
+                    ],
+                    usage: {
+                        prompt_tokens: content.length,
+                        completion_tokens: mockResponse.length,
+                        total_tokens: content.length + mockResponse.length
+                    }
                 }
             }
         } catch (error) {
@@ -292,10 +483,12 @@ class ZGComputeService {
         }
 
         try {
-            // In a real implementation, you would verify the response using TEE verification
-            // For now, we'll return true as the SDK is not browser-compatible
-            console.log(`Response verification for ${providerAddress} (browser mode)`)
-            return true
+            if (this.broker) {
+                return await this.broker.inference.processResponse(providerAddress, content, chatId)
+            } else {
+                console.log(`Response verification for ${providerAddress} (demo mode)`)
+                return true
+            }
         } catch (error) {
             console.error('Failed to verify response:', error)
             return false
@@ -311,19 +504,79 @@ class ZGComputeService {
         }
 
         try {
-            // In a real implementation, you would call the 0G Network API to get the balance
-            // For now, we'll return a mock balance as the SDK is not browser-compatible
-            const availableBalance = BigInt('5000000000000000000') // 5 OG
-            const lockedBalance = BigInt('1000000000000000000') // 1 OG
-            const totalBalance = availableBalance + lockedBalance
+            if (this.broker) {
+                console.log("🔍 Checking account balance...")
+                const account = await this.broker.ledger.getLedger()
+                console.log("📊 Raw Account Data:", account)
 
-            return {
-                balance: availableBalance,
-                locked: lockedBalance,
-                totalbalance: totalBalance
+                // Parse the account structure based on the data you showed
+                const totalBalance = BigInt(account[1]) // Total balance (2100000000000000006n)
+                const lockedBalance = BigInt(account[2]) // Locked balance (4100000000000000006n)
+                const subAccounts = account[3] // Sub-accounts array
+                const providers = account[5] // Available providers array
+
+                console.log("📊 Account Overview:")
+                console.log(`Total Balance: ${ethers.formatEther(totalBalance)} OG`)
+                console.log(`Locked Balance: ${ethers.formatEther(lockedBalance)} OG`)
+                console.log(`Available Balance: ${ethers.formatEther(totalBalance - lockedBalance)} OG`)
+
+                // Check sub-accounts
+                if (subAccounts && subAccounts.length > 0) {
+                    console.log("\n🔒 Fine-tuning Sub-accounts:")
+                    subAccounts.forEach((subAccount: any, index: number) => {
+                        console.log(`Sub-account ${index + 1}:`, subAccount)
+                        if (subAccount[0]) { // Provider address
+                            console.log(`  Provider: ${subAccount[0]}`)
+                        }
+                        if (subAccount[1]) { // Balance
+                            console.log(`  Balance: ${ethers.formatEther(subAccount[1])} OG`)
+                        }
+                    })
+                } else {
+                    console.log("\n💡 No fine-tuning sub-accounts found.")
+                    console.log("Sub-accounts are created automatically when you submit fine-tuning tasks.")
+                }
+
+                // Check available providers
+                if (providers && providers.length > 0) {
+                    console.log("\n🏢 Available Providers:")
+                    providers.forEach((provider: string, index: number) => {
+                        console.log(`  Provider ${index + 1}: ${provider}`)
+                    })
+                }
+
+                return {
+                    balance: totalBalance - lockedBalance,
+                    locked: lockedBalance,
+                    totalbalance: totalBalance
+                }
+            } else {
+                // Demo mode - return mock balance
+                const availableBalance = BigInt('5000000000000000000') // 5 OG
+                const lockedBalance = BigInt('1000000000000000000') // 1 OG
+                const totalBalance = availableBalance + lockedBalance
+
+                return {
+                    balance: availableBalance,
+                    locked: lockedBalance,
+                    totalbalance: totalBalance
+                }
             }
-        } catch (error) {
-            console.error('Failed to get account balance:', error)
+        } catch (error: any) {
+            console.log("❌ Error checking balance:", error)
+
+            if (error.message?.includes('Account does not exist')) {
+                console.log("🚨 ACCOUNT NOT FOUND!")
+                console.log("Your wallet address doesn't have an account on the 0G network yet.")
+                console.log("📝 To create an account, click 'Add Fund' button first.")
+                console.log("This will create your account with initial funding.")
+            } else if (error.message?.includes('missing trie node') || error.message?.includes('Internal JSON-RPC error')) {
+                console.log("🔧 Network issue detected. Try the following:")
+                console.log("1. Make sure you're connected to 0G Testnet")
+                console.log("2. Try refreshing the page")
+                console.log("3. Check if the RPC endpoint is working")
+            }
+
             throw new Error(`Failed to get account balance: ${error}`)
         }
     }
@@ -337,36 +590,177 @@ class ZGComputeService {
         }
 
         try {
-            // In a real implementation, you would call the 0G Network API to add funds
-            // For now, we'll simulate adding funds
-            console.log(`Added ${amount} OG tokens to account (demo mode)`)
+            if (this.broker) {
+                console.log("💰 Creating account and adding funds...")
+                console.log("This will create your 0G account if it doesn't exist.")
+                console.log("⏳ This may take a moment due to network sync issues...")
 
-            // Simulate a delay for the transaction
-            await new Promise(resolve => setTimeout(resolve, 1000))
+                const fund = await this.broker.ledger.addLedger(parseFloat(amount))
+                console.log("✅ Account created/funded successfully:", fund)
+                console.log("🎉 Your account is now ready! You can now:")
+                console.log("1. Check your balance")
+                console.log("2. Transfer funds to sub-accounts")
+                console.log("3. Make AI requests")
+            } else {
+                console.log(`Added ${amount} OG tokens to account (demo mode)`)
+                await new Promise(resolve => setTimeout(resolve, 1000))
+            }
+        } catch (error: any) {
+            console.log("❌ Failed to create account/fund:", error)
 
-            // In a real implementation, you would refresh the balance here
-            console.log('Funds added successfully!')
-        } catch (error) {
-            console.error('Failed to add funds:', error)
+            if (error.message?.includes('missing trie node') || error.message?.includes('missing revert data')) {
+                console.log("🔧 Network sync issue detected. Try these solutions:")
+                console.log("1. Wait 30 seconds and try again")
+                console.log("2. Refresh the page")
+                console.log("3. Try switching to a different network and back")
+                console.log("4. Check if the 0G testnet is experiencing issues")
+            } else {
+                console.log("Make sure you have sufficient ETH for gas fees")
+            }
+
             throw new Error(`Failed to add funds: ${error}`)
+        }
+    }
+
+    /**
+     * Deposit funds to existing account
+     */
+    async depositFund(amount: string): Promise<void> {
+        if (!this.isReady()) {
+            throw new Error('0G Compute service not initialized')
+        }
+
+        try {
+            if (this.broker) {
+                console.log("💰 Depositing funds to your account...")
+                console.log("This will add OG tokens to your existing account.")
+
+                const result = await this.broker.ledger.depositFund(parseFloat(amount))
+                console.log("✅ Deposit successful:", result)
+                console.log("🎉 Your account balance has been increased!")
+                console.log("You can now:")
+                console.log("1. Check your updated balance")
+                console.log("2. Transfer funds to sub-accounts")
+                console.log("3. Make AI requests")
+            } else {
+                console.log(`Deposited ${amount} OG tokens to account (demo mode)`)
+                await new Promise(resolve => setTimeout(resolve, 1000))
+            }
+        } catch (error: any) {
+            console.log("❌ Deposit failed:", error)
+
+            if (error.message?.includes('missing trie node') || error.message?.includes('missing revert data')) {
+                console.log("🔧 Network sync issue detected. Try these solutions:")
+                console.log("1. Wait 30 seconds and try again")
+                console.log("2. Refresh the page")
+                console.log("3. Try switching to a different network and back")
+                console.log("4. Check if the 0G testnet is experiencing issues")
+            } else {
+                console.log("Make sure you have sufficient ETH for gas fees")
+            }
+
+            throw new Error(`Failed to deposit funds: ${error}`)
         }
     }
 
     /**
      * Request refund
      */
-    async requestRefund(serviceType: string, amount: string): Promise<void> {
+    async requestRefund(amount: string): Promise<void> {
         if (!this.isReady()) {
             throw new Error('0G Compute service not initialized')
         }
 
         try {
-            // In a real implementation, you would call the 0G Network API to request refund
-            // For now, we'll just log it as the SDK is not browser-compatible
-            console.log(`Requested refund of ${amount} OG tokens for ${serviceType} (browser mode)`)
-        } catch (error) {
-            console.error('Failed to request refund:', error)
+            if (this.broker) {
+                console.log("🔄 Requesting funds return from all sub-accounts...")
+                console.log("Note: Funds will be available after 24-hour lock period")
+
+                const result = await this.broker.ledger.retrieveFund("fineTuning")
+                console.log("✅ Retrieve request submitted:", result)
+                console.log("Check back in 24 hours to complete the refund")
+            } else {
+                console.log(`Requested refund of ${amount} OG tokens (demo mode)`)
+            }
+        } catch (error: any) {
+            console.log("❌ Retrieve request failed:", error)
             throw new Error(`Failed to request refund: ${error}`)
+        }
+    }
+
+    /**
+     * Transfer funds to inference sub-account
+     */
+    async transferToInference(providerAddress: string, amount: string): Promise<void> {
+        if (!this.isReady()) {
+            throw new Error('0G Compute service not initialized')
+        }
+
+        try {
+            if (this.broker) {
+                // Use selected provider or fallback to official address
+                const finalProviderAddress = providerAddress || "0xf07240Efa67755B5311bc75784a061eDB47165Dd"
+                console.log("Using provider:", finalProviderAddress)
+
+                const serviceTypeStr = "inference" // Transfer to inference sub-account
+                const amountWei = ethers.parseEther(amount) // Transfer OG token
+
+                console.log(`Transferring ${ethers.formatEther(amountWei)} OG to inference sub-account...`)
+
+                const result = await this.broker.ledger.transferFund(
+                    finalProviderAddress,
+                    serviceTypeStr,
+                    amountWei,
+                    undefined // gasPrice - can be undefined for default
+                )
+
+                console.log("✅ Transfer successful:", result)
+                console.log("You can now use inference services with this provider")
+            } else {
+                console.log(`Transferred ${amount} OG to inference sub-account (demo mode)`)
+            }
+        } catch (error: any) {
+            console.log("❌ Transfer failed:", error)
+            console.log("Make sure you have sufficient balance and are on the correct network")
+            throw new Error(`Failed to transfer to inference: ${error}`)
+        }
+    }
+
+    /**
+     * Transfer funds to fine-tuning sub-account
+     */
+    async transferToFineTuning(providerAddress: string, amount: string): Promise<void> {
+        if (!this.isReady()) {
+            throw new Error('0G Compute service not initialized')
+        }
+
+        try {
+            if (this.broker) {
+                // Use selected provider or fallback to official address
+                const finalProviderAddress = providerAddress || "0xf07240Efa67755B5311bc75784a061eDB47165Dd"
+                console.log("Using provider:", finalProviderAddress)
+
+                const serviceTypeStr = "fineTuning" // Transfer to fine-tuning sub-account
+                const amountWei = ethers.parseEther(amount) // Transfer OG token (as per CLI docs)
+
+                console.log(`Transferring ${ethers.formatEther(amountWei)} OG to fine-tuning sub-account...`)
+
+                const result = await this.broker.ledger.transferFund(
+                    finalProviderAddress,
+                    serviceTypeStr,
+                    amountWei,
+                    undefined // gasPrice - can be undefined for default
+                )
+
+                console.log("✅ Transfer successful:", result)
+                console.log("You can now create fine-tuning tasks with this provider")
+            } else {
+                console.log(`Transferred ${amount} OG to fine-tuning sub-account (demo mode)`)
+            }
+        } catch (error: any) {
+            console.log("❌ Transfer failed:", error)
+            console.log("Make sure you have sufficient balance and are on the correct network")
+            throw new Error(`Failed to transfer to fine-tuning: ${error}`)
         }
     }
 

@@ -8,8 +8,9 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Brain, Search, FileText, BarChart3, Download, Share2, BookOpen, Lightbulb, Target, TrendingUp } from "lucide-react"
+import { Brain, Search, FileText, BarChart3, Download, Share2, BookOpen, Lightbulb, Target, TrendingUp, Wallet, RefreshCw, AlertCircle, Copy } from "lucide-react"
 import { useZGCompute } from "@/hooks/use-0g-compute"
+import { ethers } from "ethers"
 
 interface ResearchProject {
     id: string
@@ -33,13 +34,31 @@ interface ResearchInsight {
 }
 
 export function ResearchAssistant() {
-    const { selectedService, sendInference, isInitialized } = useZGCompute()
+    const {
+        selectedService,
+        setSelectedService,
+        sendInference,
+        isInitialized,
+        accountBalance,
+        isLoading,
+        error: zgError,
+        services,
+        addFunds,
+        depositFund,
+        transferToInference,
+        transferToFineTuning,
+        refreshServices,
+        refreshBalance
+    } = useZGCompute()
+
     const [researchQuery, setResearchQuery] = useState("")
     const [researchContext, setResearchContext] = useState("")
     const [researchType, setResearchType] = useState("academic")
     const [isAnalyzing, setIsAnalyzing] = useState(false)
     const [researchInsights, setResearchInsights] = useState<ResearchInsight[]>([])
     const [researchProjects, setResearchProjects] = useState<ResearchProject[]>([])
+    const [error, setError] = useState<string | null>(null)
+    const [fullResponse, setFullResponse] = useState<string | null>(null)
 
     const researchTypes = [
         { value: "academic", label: "Academic Research", icon: BookOpen },
@@ -52,6 +71,9 @@ export function ResearchAssistant() {
         if (!researchQuery.trim() || !selectedService || !isInitialized) return
 
         setIsAnalyzing(true)
+        setError(null) // Clear previous errors
+        setFullResponse(null) // Clear previous response
+
         try {
             const prompt = createResearchPrompt(researchQuery, researchContext, researchType)
 
@@ -62,7 +84,9 @@ export function ResearchAssistant() {
                 max_tokens: 2000
             })
 
-            const insights = parseResearchInsights(response.choices[0].message.content)
+            const responseContent = response.choices[0].message.content
+            setFullResponse(responseContent)
+            const insights = parseResearchInsights(responseContent)
             setResearchInsights(insights)
 
             // Create a new research project
@@ -79,8 +103,17 @@ export function ResearchAssistant() {
             }
 
             setResearchProjects(prev => [newProject, ...prev])
-        } catch (error) {
+        } catch (error: any) {
             console.error('Research analysis failed:', error)
+
+            // Handle specific error cases
+            if (error.message?.includes('insufficient balance')) {
+                setError('Insufficient balance in inference sub-account. Please transfer funds to inference first using the Account Management tab.')
+            } else if (error.message?.includes('ERR_TUNNEL_CONNECTION_FAILED') || error.message?.includes('Failed to fetch')) {
+                setError('Network connectivity issue. The AI provider endpoint may be temporarily unavailable. Please try again later.')
+            } else {
+                setError(error.message || 'Research analysis failed. Please check your account balance and try again.')
+            }
         } finally {
             setIsAnalyzing(false)
         }
@@ -150,24 +183,48 @@ Format your response with clear sections and competitive insights.`
 
     const parseResearchInsights = (content: string): ResearchInsight[] => {
         const insights: ResearchInsight[] = []
-        const sections = content.split(/\*\*([^*]+)\*\*/)
 
-        sections.forEach((section, index) => {
-            if (section.includes('Findings') || section.includes('Insights') || section.includes('Recommendations')) {
-                const lines = section.split('\n').filter(line => line.trim())
-                lines.forEach(line => {
-                    if (line.trim() && !line.includes('**')) {
-                        insights.push({
-                            id: `${Date.now()}-${index}`,
-                            type: 'finding',
-                            content: line.trim(),
-                            confidence: 0.8,
-                            sources: ['AI Analysis'],
-                            createdAt: new Date()
-                        })
-                    }
+        // Split content into sections based on headers
+        const sections = content.split(/(?=#{1,6}\s|\*\*[^*]+\*\*)/)
+
+        sections.forEach((section, sectionIndex) => {
+            const lines = section.split('\n').filter(line => line.trim())
+
+            lines.forEach((line, lineIndex) => {
+                const trimmedLine = line.trim()
+
+                // Skip empty lines, headers, and table separators
+                if (!trimmedLine ||
+                    trimmedLine.startsWith('#') ||
+                    trimmedLine.startsWith('**') ||
+                    trimmedLine.startsWith('|') ||
+                    trimmedLine.startsWith('---') ||
+                    trimmedLine.startsWith('---')) {
+                    return
+                }
+
+                // Determine insight type based on section content
+                let insightType: 'finding' | 'trend' | 'recommendation' | 'gap' = 'finding'
+                if (section.includes('Gap') || section.includes('gap')) {
+                    insightType = 'gap'
+                } else if (section.includes('Recommendation') || section.includes('recommendation')) {
+                    insightType = 'recommendation'
+                } else if (section.includes('Trend') || section.includes('trend')) {
+                    insightType = 'trend'
+                }
+
+                // Create unique ID using section and line indices
+                const uniqueId = `${Date.now()}-${sectionIndex}-${lineIndex}`
+
+                insights.push({
+                    id: uniqueId,
+                    type: insightType,
+                    content: trimmedLine,
+                    confidence: 0.8,
+                    sources: ['AI Analysis'],
+                    createdAt: new Date()
                 })
-            }
+            })
         })
 
         return insights
@@ -179,6 +236,15 @@ Format your response with clear sections and competitive insights.`
             word.length > 3 && !['the', 'and', 'for', 'with', 'this', 'that'].includes(word)
         )
         return [...commonTags, ...queryTags.slice(0, 3)]
+    }
+
+    const copyToClipboard = async (text: string) => {
+        try {
+            await navigator.clipboard.writeText(text)
+            // You could add a toast notification here
+        } catch (err) {
+            console.error('Failed to copy text: ', err)
+        }
     }
 
     const getInsightIcon = (type: string) => {
@@ -215,6 +281,7 @@ Format your response with clear sections and competitive insights.`
                     <TabsTrigger value="analyze">Research Analysis</TabsTrigger>
                     <TabsTrigger value="projects">Research Projects</TabsTrigger>
                     <TabsTrigger value="insights">Insights Library</TabsTrigger>
+                    <TabsTrigger value="account">Account Management</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="analyze" className="space-y-6">
@@ -249,12 +316,83 @@ Format your response with clear sections and competitive insights.`
                                     </Select>
                                 </div>
                                 <div className="space-y-2">
-                                    <label className="text-sm font-medium">AI Model</label>
-                                    <div className="p-2 bg-muted rounded-lg text-sm">
-                                        {selectedService?.model || 'No model selected'}
-                                    </div>
+                                    <label className="text-sm font-medium">AI Service</label>
+                                    <Select
+                                        value={selectedService?.provider || ""}
+                                        onValueChange={(value) => {
+                                            const service = services.find(s => s.provider === value)
+                                            if (service) setSelectedService(service)
+                                        }}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select AI Service" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {services.map(service => (
+                                                <SelectItem key={service.provider} value={service.provider}>
+                                                    <div className="flex items-center gap-2">
+                                                        <span>{service.model}</span>
+                                                        <span className="text-xs text-muted-foreground">
+                                                            {service.provider.slice(0, 8)}...{service.provider.slice(-6)}
+                                                        </span>
+                                                    </div>
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                 </div>
                             </div>
+
+                            {/* Account Balance Display */}
+                            {accountBalance && (
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Account Balance</label>
+                                    <div className="p-3 bg-muted rounded-lg">
+                                        <div className="grid grid-cols-2 gap-4 text-sm">
+                                            <div className="flex justify-between">
+                                                <span className="text-muted-foreground">Available:</span>
+                                                <span className="font-medium">{ethers.formatEther(accountBalance.balance)} OG</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-muted-foreground">Locked:</span>
+                                                <span className="font-medium">{ethers.formatEther(accountBalance.locked)} OG</span>
+                                            </div>
+                                        </div>
+                                        <div className="mt-2 pt-2 border-t">
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-muted-foreground">Total:</span>
+                                                <span className="font-semibold">{ethers.formatEther(accountBalance.totalbalance)} OG</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Error Display */}
+                            {(error || zgError) && (
+                                <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <AlertCircle className="h-4 w-4 text-red-600" />
+                                        <p className="text-red-800 text-sm">{error || zgError}</p>
+                                    </div>
+                                    {error?.includes('insufficient balance') && selectedService && (
+                                        <div className="mt-2">
+                                            <Button
+                                                onClick={() => transferToInference(selectedService.provider, "0.1")}
+                                                disabled={isLoading}
+                                                size="sm"
+                                                className="bg-red-600 hover:bg-red-700 text-white"
+                                            >
+                                                <Wallet className="h-4 w-4 mr-2" />
+                                                Transfer 0.1 OG to Inference
+                                            </Button>
+                                            <p className="text-xs text-red-600 mt-1">
+                                                This will transfer funds to your inference sub-account for AI requests
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                             <div className="space-y-2">
                                 <label className="text-sm font-medium">Research Query</label>
@@ -292,6 +430,19 @@ Format your response with clear sections and competitive insights.`
                                     </>
                                 )}
                             </Button>
+
+                            {/* Quick Setup Guide */}
+                            {!isInitialized && (
+                                <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                    <h4 className="font-medium text-yellow-800 mb-2">🚀 Getting Started</h4>
+                                    <ol className="text-sm text-yellow-700 space-y-1">
+                                        <li>1. Go to <strong>Account Management</strong> tab</li>
+                                        <li>2. Click <strong>"Add Funds"</strong> to create your account</li>
+                                        <li>3. Transfer funds to inference sub-account for AI requests</li>
+                                        <li>4. Select an AI service and start researching!</li>
+                                    </ol>
+                                </div>
+                            )}
                         </CardContent>
                     </Card>
 
@@ -305,7 +456,7 @@ Format your response with clear sections and competitive insights.`
                             </CardHeader>
                             <CardContent>
                                 <div className="space-y-4">
-                                    {researchInsights.map((insight, index) => (
+                                    {researchInsights.map((insight) => (
                                         <div key={insight.id} className="p-4 border rounded-lg">
                                             <div className="flex items-start gap-3">
                                                 <div className={`p-2 rounded-full ${getInsightColor(insight.type)}`}>
@@ -329,6 +480,38 @@ Format your response with clear sections and competitive insights.`
                                             </div>
                                         </div>
                                     ))}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* Full AI Response */}
+                    {fullResponse && (
+                        <Card>
+                            <CardHeader>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <FileText className="h-5 w-5" />
+                                        <CardTitle>Complete AI Response</CardTitle>
+                                    </div>
+                                    <Button
+                                        onClick={() => copyToClipboard(fullResponse)}
+                                        size="sm"
+                                        variant="outline"
+                                    >
+                                        <Copy className="h-4 w-4 mr-2" />
+                                        Copy
+                                    </Button>
+                                </div>
+                                <CardDescription>
+                                    Full response from the AI analysis
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="prose prose-sm max-w-none">
+                                    <pre className="whitespace-pre-wrap text-sm bg-muted p-4 rounded-lg overflow-x-auto">
+                                        {fullResponse}
+                                    </pre>
                                 </div>
                             </CardContent>
                         </Card>
@@ -409,6 +592,162 @@ Format your response with clear sections and competitive insights.`
                         <CardContent>
                             <div className="text-center py-8 text-muted-foreground">
                                 Insights library coming soon. Your research insights will be organized here.
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                <TabsContent value="account" className="space-y-6">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <Wallet className="h-5 w-5" />
+                                0G Account Management
+                            </CardTitle>
+                            <CardDescription>
+                                Manage your 0G account balance and fund transfers
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-6">
+                            {/* Account Status */}
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Account Status</label>
+                                <div className="flex items-center gap-2">
+                                    <div className={`w-2 h-2 rounded-full ${isInitialized ? 'bg-green-500' : 'bg-red-500'}`} />
+                                    <span className="text-sm">
+                                        {isInitialized ? 'Connected to 0G Network' : 'Not Connected'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Account Balance */}
+                            {accountBalance && (
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Account Balance</label>
+                                    <div className="p-4 bg-muted rounded-lg">
+                                        <div className="grid grid-cols-3 gap-4 text-sm">
+                                            <div className="text-center">
+                                                <div className="text-2xl font-bold text-green-600">
+                                                    {ethers.formatEther(accountBalance.balance)}
+                                                </div>
+                                                <div className="text-xs text-muted-foreground">Available OG</div>
+                                            </div>
+                                            <div className="text-center">
+                                                <div className="text-2xl font-bold text-orange-600">
+                                                    {ethers.formatEther(accountBalance.locked)}
+                                                </div>
+                                                <div className="text-xs text-muted-foreground">Locked OG</div>
+                                            </div>
+                                            <div className="text-center">
+                                                <div className="text-2xl font-bold text-blue-600">
+                                                    {ethers.formatEther(accountBalance.totalbalance)}
+                                                </div>
+                                                <div className="text-xs text-muted-foreground">Total OG</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Fund Management */}
+                            <div className="space-y-4">
+                                <label className="text-sm font-medium">Fund Management</label>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <Button
+                                        onClick={() => addFunds("0.1")}
+                                        disabled={isLoading}
+                                        className="w-full"
+                                        size="sm"
+                                    >
+                                        <Wallet className="h-4 w-4 mr-2" />
+                                        Add Funds (0.1 OG)
+                                    </Button>
+                                    <Button
+                                        onClick={() => depositFund("0.2")}
+                                        disabled={isLoading}
+                                        variant="outline"
+                                        className="w-full"
+                                        size="sm"
+                                    >
+                                        <Wallet className="h-4 w-4 mr-2" />
+                                        Deposit (0.2 OG)
+                                    </Button>
+                                </div>
+                                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                                    <p className="text-sm text-blue-800">
+                                        <strong>💡 Tip:</strong> Before making AI requests, you need to transfer funds to your inference sub-account.
+                                        Use the "Transfer to Inference" buttons below for each service.
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* Service Management */}
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <label className="text-sm font-medium">Service Management</label>
+                                    <Button
+                                        onClick={refreshServices}
+                                        disabled={isLoading}
+                                        size="sm"
+                                        variant="outline"
+                                    >
+                                        <RefreshCw className="h-4 w-4 mr-2" />
+                                        Refresh
+                                    </Button>
+                                </div>
+
+                                {services.length > 0 && (
+                                    <div className="space-y-2">
+                                        <div className="text-sm text-muted-foreground">
+                                            Available Services ({services.length})
+                                        </div>
+                                        <div className="grid grid-cols-1 gap-2">
+                                            {services.map(service => (
+                                                <div key={service.provider} className="p-3 border rounded-lg">
+                                                    <div className="flex items-center justify-between">
+                                                        <div>
+                                                            <div className="font-medium">{service.model}</div>
+                                                            <div className="text-xs text-muted-foreground">
+                                                                {service.provider.slice(0, 8)}...{service.provider.slice(-6)}
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex gap-1">
+                                                            <Button
+                                                                onClick={() => transferToInference(service.provider, "0.1")}
+                                                                disabled={isLoading}
+                                                                size="sm"
+                                                                variant="outline"
+                                                            >
+                                                                Transfer to Inference
+                                                            </Button>
+                                                            <Button
+                                                                onClick={() => transferToFineTuning(service.provider, "0.1")}
+                                                                disabled={isLoading}
+                                                                size="sm"
+                                                                variant="outline"
+                                                            >
+                                                                Transfer to Fine-tuning
+                                                            </Button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Refresh Balance */}
+                            <div className="pt-4 border-t">
+                                <Button
+                                    onClick={refreshBalance}
+                                    disabled={isLoading}
+                                    className="w-full"
+                                    variant="outline"
+                                >
+                                    <RefreshCw className="h-4 w-4 mr-2" />
+                                    Refresh Account Balance
+                                </Button>
                             </div>
                         </CardContent>
                     </Card>

@@ -20,13 +20,25 @@ export function useZGCompute() {
             const success = await zgComputeService.initialize(null, null)
             if (success) {
                 setIsInitialized(true)
-                setServices(zgComputeService.getOfficialServices())
-                setSelectedService(zgComputeService.getOfficialServices()[0])
-                setAccountBalance({
-                    balance: BigInt('5000000000000000000'),
-                    locked: BigInt('1000000000000000000'),
-                    totalbalance: BigInt('6000000000000000000')
-                })
+                const availableServices = await zgComputeService.getAvailableServices()
+                setServices(availableServices)
+                if (availableServices.length > 0) {
+                    setSelectedService(availableServices[0])
+                }
+
+                // Get account balance
+                try {
+                    const balance = await zgComputeService.getAccountBalance()
+                    setAccountBalance(balance)
+                } catch (balanceError) {
+                    console.warn('Could not get account balance:', balanceError)
+                    // Set mock balance for demo
+                    setAccountBalance({
+                        balance: BigInt('5000000000000000000'),
+                        locked: BigInt('1000000000000000000'),
+                        totalbalance: BigInt('6000000000000000000')
+                    })
+                }
             }
         } catch (err) {
             console.error('Failed to initialize 0G Compute:', err)
@@ -71,6 +83,17 @@ export function useZGCompute() {
         }
     }, [])
 
+    const depositFund = useCallback(async (amount: string) => {
+        try {
+            await zgComputeService.depositFund(amount)
+            const balance = await zgComputeService.getAccountBalance()
+            setAccountBalance(balance)
+        } catch (err) {
+            console.error('Failed to deposit funds:', err)
+            setError('Failed to deposit funds')
+        }
+    }, [])
+
     const requestRefund = useCallback(async (amount: string) => {
         try {
             await zgComputeService.requestRefund(amount)
@@ -82,27 +105,56 @@ export function useZGCompute() {
         }
     }, [])
 
+    const transferToInference = useCallback(async (providerAddress: string, amount: string) => {
+        try {
+            await zgComputeService.transferToInference(providerAddress, amount)
+            const balance = await zgComputeService.getAccountBalance()
+            setAccountBalance(balance)
+        } catch (err) {
+            console.error('Failed to transfer to inference:', err)
+            setError('Failed to transfer to inference')
+        }
+    }, [])
+
+    const transferToFineTuning = useCallback(async (providerAddress: string, amount: string) => {
+        try {
+            await zgComputeService.transferToFineTuning(providerAddress, amount)
+            const balance = await zgComputeService.getAccountBalance()
+            setAccountBalance(balance)
+        } catch (err) {
+            console.error('Failed to transfer to fine-tuning:', err)
+            setError('Failed to transfer to fine-tuning')
+        }
+    }, [])
+
+    const refreshServices = useCallback(async () => {
+        try {
+            const availableServices = await zgComputeService.getAvailableServices()
+            setServices(availableServices)
+            if (availableServices.length > 0 && !selectedService) {
+                setSelectedService(availableServices[0])
+            }
+        } catch (err) {
+            console.error('Failed to refresh services:', err)
+            setError('Failed to refresh services')
+        }
+    }, [selectedService])
+
+    const refreshBalance = useCallback(async () => {
+        try {
+            const balance = await zgComputeService.getAccountBalance()
+            setAccountBalance(balance)
+        } catch (err) {
+            console.error('Failed to refresh balance:', err)
+            setError('Failed to refresh balance')
+        }
+    }, [])
+
     useEffect(() => {
         if (!isInitialized) {
-            const initDemo = async () => {
-                try {
-                    await zgComputeService.initialize(null as any, null as any)
-                    setIsInitialized(true)
-                    setServices(zgComputeService.getOfficialServices())
-                    setSelectedService(zgComputeService.getOfficialServices()[0])
-                    setAccountBalance({
-                        balance: BigInt('5000000000000000000'),
-                        locked: BigInt('1000000000000000000'),
-                        totalbalance: BigInt('6000000000000000000')
-                    })
-                } catch (error) {
-                    console.error('Failed to initialize in demo mode:', error)
-                    setError('Failed to initialize demo mode')
-                }
-            }
-            initDemo()
+            initialize()
         }
-    }, [isInitialized])
+    }, [isInitialized, initialize])
 
     return {
         isInitialized,
@@ -114,7 +166,12 @@ export function useZGCompute() {
         error,
         sendInference,
         addFunds,
+        depositFund,
         requestRefund,
+        transferToInference,
+        transferToFineTuning,
+        refreshServices,
+        refreshBalance,
         initialize
     }
 }
