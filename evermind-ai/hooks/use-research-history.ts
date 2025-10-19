@@ -191,39 +191,34 @@ export const useResearchHistory = (
         setError(null)
 
         try {
-            // Try to load from blockchain first
             if (researchHistoryService && signer && contractAddress) {
                 try {
                     const userAddress = await signer.getAddress()
-                    const sessionIds = await researchHistoryService.getResearcherSessions(userAddress)
+                    const network = await signer.provider.getNetwork()
 
+                    if (network.chainId !== 16602n) {
+                        throw new Error('Please switch to 0G Testnet in MetaMask')
+                    }
+
+                    const sessionIds = await researchHistoryService.getResearcherSessions(userAddress)
                     const sessionPromises = sessionIds.map(id =>
                         researchHistoryService.getResearchSession(id)
                     )
 
                     const loadedSessions = await Promise.all(sessionPromises)
                     setSessions(loadedSessions)
-
-                    console.log('✅ Loaded sessions from blockchain:', loadedSessions.length)
                     return
                 } catch (err: any) {
-                    // Check if this is a contract availability error
                     if (err.message?.includes('missing revert data') ||
                         err.message?.includes('CALL_EXCEPTION') ||
                         err.message?.includes('no matching receipts')) {
-                        console.warn('⚠️ Contract not available, falling back to local storage')
                         setError('Contract not deployed or not accessible')
-                    } else {
-                        console.warn('⚠️ Blockchain loading failed, falling back to local storage:', err)
                     }
                 }
             }
 
-            // Fallback: Load sessions from local storage
-            console.log('🔍 Loading sessions from local storage...')
             const localSessions = loadSessionsFromLocalStorage()
             setSessions(localSessions)
-            console.log('✅ Loaded sessions from local storage:', localSessions.length)
 
         } catch (err: any) {
             const errorMsg = err.message || 'Failed to load sessions'

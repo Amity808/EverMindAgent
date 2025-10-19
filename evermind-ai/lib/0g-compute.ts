@@ -98,7 +98,6 @@ class ZGComputeService {
         } catch (error: any) {
             console.log("Network switch error:", error)
 
-            // If the network doesn't exist, try to add it
             if (error.code === 4902) {
                 try {
                     await window.ethereum.request({

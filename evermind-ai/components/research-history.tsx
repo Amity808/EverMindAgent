@@ -69,21 +69,13 @@ export function ResearchHistory({
 
     const loadSessionResponsesFromLocal = async (session: ResearchSession) => {
         try {
-            console.log('🔍 Checking local storage for session responses...')
-
-            // Look for local research data in localStorage
             const localKeys = Object.keys(localStorage).filter(key =>
                 key.startsWith('research_data_') || key.startsWith('research-session-')
             )
 
-            console.log('📁 Found local storage keys:', localKeys)
-
             const responses: any[] = []
 
             if (localKeys.length > 0) {
-                console.log('✅ Found local research data!')
-
-                // Parse each local research data entry
                 localKeys.forEach(key => {
                     try {
                         const data = localStorage.getItem(key)
@@ -98,22 +90,18 @@ export function ResearchHistory({
                             })
                         }
                     } catch (parseError) {
-                        console.warn('⚠️ Failed to parse local data:', key, parseError)
+                        console.warn('Failed to parse local data:', key, parseError)
                     }
                 })
 
-                // Sort by timestamp
                 responses.sort((a, b) => b.timestamp - a.timestamp)
                 setLocalResponses(responses)
-
-                console.log('📊 Loaded local responses:', responses.length)
             } else {
-                console.log('⚠️ No local research data found')
                 setLocalResponses([])
             }
 
         } catch (error) {
-            console.error('❌ Failed to load local responses:', error)
+            console.error('Failed to load local responses:', error)
             setLocalResponses([])
         }
     }
