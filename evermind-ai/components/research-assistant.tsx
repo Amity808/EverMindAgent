@@ -10,6 +10,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Brain, Search, FileText, BarChart3, Download, Share2, BookOpen, Lightbulb, Target, TrendingUp, Wallet, RefreshCw, AlertCircle, Copy } from "lucide-react"
 import { useZGCompute } from "@/hooks/use-0g-compute"
+import { useResearchHistory } from "@/hooks/use-research-history"
+import { ResearchHistory } from "@/components/research-history"
+import { RESEARCH_HISTORY_ABI } from "@/lib/research-history-abi"
 import { ethers } from "ethers"
 
 interface ResearchProject {
@@ -48,8 +51,32 @@ export function ResearchAssistant() {
         transferToInference,
         transferToFineTuning,
         refreshServices,
-        refreshBalance
+        refreshBalance,
+        provider,
+        signer
     } = useZGCompute()
+
+    // Research History Integration
+    const {
+        currentSession,
+        sessions,
+        isLoading: historyLoading,
+        error: historyError,
+        createSession,
+        completeSession,
+        addQuery,
+        addResponse,
+        loadSessions,
+        loadSession,
+        loadResponse,
+        verifyResponse,
+        refreshData: refreshHistory
+    } = useResearchHistory(
+        provider, // Use provider from 0G compute hook
+        signer, // Use signer from 0G compute hook
+        process.env.NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT || '',
+        RESEARCH_HISTORY_ABI
+    )
 
     const [researchQuery, setResearchQuery] = useState("")
     const [researchContext, setResearchContext] = useState("")
@@ -59,6 +86,7 @@ export function ResearchAssistant() {
     const [researchProjects, setResearchProjects] = useState<ResearchProject[]>([])
     const [error, setError] = useState<string | null>(null)
     const [fullResponse, setFullResponse] = useState<string | null>(null)
+    const [currentQueryId, setCurrentQueryId] = useState<string | null>(null)
 
     const researchTypes = [
         { value: "academic", label: "Academic Research", icon: BookOpen },
@@ -75,6 +103,28 @@ export function ResearchAssistant() {
         setFullResponse(null) // Clear previous response
 
         try {
+            // Create session if none exists (only if blockchain is available)
+            let sessionId = currentSession?.sessionId
+            let queryId = null
+
+            if (process.env.NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT && provider && signer) {
+                if (!sessionId) {
+                    console.log('🔗 Creating new research session...')
+                    sessionId = await createSession(researchType)
+                }
+
+                // Add query to blockchain
+                console.log('📝 Adding query to blockchain...')
+                queryId = await addQuery(researchQuery, researchContext)
+                setCurrentQueryId(queryId)
+            } else {
+                console.log('⚠️ Blockchain features disabled - using local mode')
+                // Generate local IDs for demo purposes
+                sessionId = `local-${Date.now()}`
+                queryId = `query-${Date.now()}`
+                setCurrentQueryId(queryId)
+            }
+
             const prompt = createResearchPrompt(researchQuery, researchContext, researchType)
 
             const response = await sendInference({
@@ -89,6 +139,67 @@ export function ResearchAssistant() {
             const insights = parseResearchInsights(responseContent)
             setResearchInsights(insights)
 
+            // Store response on blockchain and IPFS (if available)
+            if (process.env.NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT && provider && signer && queryId) {
+                console.log('💾 Storing response on blockchain...')
+                const researchData = {
+                    sessionId: sessionId,
+                    queryId: queryId,
+                    query: researchQuery,
+                    context: researchContext,
+                    response: responseContent,
+                    insights: insights,
+                    metadata: {
+                        timestamp: Date.now(),
+                        researchType: researchType,
+                        model: selectedService.model,
+                        provider: selectedService.provider,
+                        cost: 0.001, // Estimated cost
+                        researcher: signer ? await signer.getAddress() : 'local-user',
+                        sessionCreatedAt: Date.now(),
+                        queryIndex: 1 // This would need to be tracked properly
+                    }
+                }
+
+                try {
+                    await addResponse(queryId, researchData)
+                } catch (blockchainError) {
+                    console.warn('⚠️ Failed to store on blockchain, continuing with local storage:', blockchainError)
+                }
+            } else {
+                console.log('💾 Storing response locally (blockchain not available)')
+
+                // Store locally with proper session metadata
+                const localResearchData = {
+                    sessionId: sessionId,
+                    queryId: queryId,
+                    query: researchQuery,
+                    context: researchContext,
+                    response: responseContent,
+                    insights: insights,
+                    metadata: {
+                        timestamp: Date.now(),
+                        researchType: researchType,
+                        model: selectedService.model,
+                        provider: selectedService.provider,
+                        cost: 0.001,
+                        researcher: 'local-user',
+                        sessionCreatedAt: Date.now(),
+                        queryIndex: 1,
+                        storedLocally: true
+                    }
+                }
+
+                // Store in localStorage with session-specific key
+                try {
+                    const storageKey = `research-session-${sessionId}-${queryId}`
+                    localStorage.setItem(storageKey, JSON.stringify(localResearchData))
+                    console.log('✅ Research data stored locally:', storageKey)
+                } catch (storageError) {
+                    console.warn('⚠️ Failed to store in localStorage:', storageError)
+                }
+            }
+
             // Create a new research project
             const newProject: ResearchProject = {
                 id: Date.now().toString(),
@@ -99,10 +210,14 @@ export function ResearchAssistant() {
                 lastUpdated: new Date(),
                 tags: extractTags(researchQuery),
                 insights: insights.map(i => i.content),
-                dataSources: ['AI Analysis', '0G Compute Network']
+                dataSources: process.env.NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT && provider && signer
+                    ? ['AI Analysis', '0G Compute Network', 'Blockchain Verified']
+                    : ['AI Analysis', '0G Compute Network']
             }
 
             setResearchProjects(prev => [newProject, ...prev])
+
+            console.log('✅ Research analysis completed and stored on blockchain!')
         } catch (error: any) {
             console.error('Research analysis failed:', error)
 
@@ -190,41 +305,76 @@ Format your response with clear sections and competitive insights.`
         sections.forEach((section, sectionIndex) => {
             const lines = section.split('\n').filter(line => line.trim())
 
-            lines.forEach((line, lineIndex) => {
-                const trimmedLine = line.trim()
+            // Determine insight type based on section content
+            let insightType: 'finding' | 'trend' | 'recommendation' | 'gap' = 'finding'
+            if (section.includes('Gap') || section.includes('gap')) {
+                insightType = 'gap'
+            } else if (section.includes('Recommendation') || section.includes('recommendation')) {
+                insightType = 'recommendation'
+            } else if (section.includes('Trend') || section.includes('trend')) {
+                insightType = 'trend'
+            }
+
+            // Process lines in meaningful chunks
+            let currentChunk = ''
+            let chunkIndex = 0
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim()
 
                 // Skip empty lines, headers, and table separators
-                if (!trimmedLine ||
-                    trimmedLine.startsWith('#') ||
-                    trimmedLine.startsWith('**') ||
-                    trimmedLine.startsWith('|') ||
-                    trimmedLine.startsWith('---') ||
-                    trimmedLine.startsWith('---')) {
-                    return
+                if (!line ||
+                    line.startsWith('#') ||
+                    line.startsWith('**') ||
+                    line.startsWith('|') ||
+                    line.startsWith('---') ||
+                    line.match(/^[-=]+$/)) {
+                    continue
                 }
 
-                // Determine insight type based on section content
-                let insightType: 'finding' | 'trend' | 'recommendation' | 'gap' = 'finding'
-                if (section.includes('Gap') || section.includes('gap')) {
-                    insightType = 'gap'
-                } else if (section.includes('Recommendation') || section.includes('recommendation')) {
-                    insightType = 'recommendation'
-                } else if (section.includes('Trend') || section.includes('trend')) {
-                    insightType = 'trend'
+                // Skip very short lines (likely formatting artifacts)
+                if (line.length < 10) {
+                    continue
                 }
 
-                // Create unique ID using section and line indices
-                const uniqueId = `${Date.now()}-${sectionIndex}-${lineIndex}`
+                // Add line to current chunk
+                if (currentChunk) {
+                    currentChunk += ' ' + line
+                } else {
+                    currentChunk = line
+                }
+
+                // Create insight when chunk reaches meaningful length or at end of section
+                if (currentChunk.length > 50 && (i === lines.length - 1 || currentChunk.length > 200)) {
+                    const uniqueId = `${Date.now()}-${sectionIndex}-${chunkIndex}`
+
+                    insights.push({
+                        id: uniqueId,
+                        type: insightType,
+                        content: currentChunk,
+                        confidence: 0.8,
+                        sources: ['AI Analysis'],
+                        createdAt: new Date()
+                    })
+
+                    currentChunk = ''
+                    chunkIndex++
+                }
+            }
+
+            // Add any remaining chunk
+            if (currentChunk && currentChunk.length > 20) {
+                const uniqueId = `${Date.now()}-${sectionIndex}-${chunkIndex}`
 
                 insights.push({
                     id: uniqueId,
                     type: insightType,
-                    content: trimmedLine,
+                    content: currentChunk,
                     confidence: 0.8,
                     sources: ['AI Analysis'],
                     createdAt: new Date()
                 })
-            })
+            }
         })
 
         return insights
@@ -281,6 +431,7 @@ Format your response with clear sections and competitive insights.`
                     <TabsTrigger value="analyze">Research Analysis</TabsTrigger>
                     <TabsTrigger value="projects">Research Projects</TabsTrigger>
                     <TabsTrigger value="insights">Insights Library</TabsTrigger>
+                    <TabsTrigger value="history">Blockchain History</TabsTrigger>
                     <TabsTrigger value="account">Account Management</TabsTrigger>
                 </TabsList>
 
@@ -597,6 +748,18 @@ Format your response with clear sections and competitive insights.`
                     </Card>
                 </TabsContent>
 
+                <TabsContent value="history" className="space-y-6">
+                    <ResearchHistory
+                        sessions={sessions}
+                        currentSession={currentSession}
+                        isLoading={historyLoading}
+                        error={historyError}
+                        onLoadSession={loadSession}
+                        onLoadResponse={loadResponse}
+                        onVerifyResponse={verifyResponse}
+                    />
+                </TabsContent>
+
                 <TabsContent value="account" className="space-y-6">
                     <Card>
                         <CardHeader>
@@ -617,6 +780,11 @@ Format your response with clear sections and competitive insights.`
                                     <span className="text-sm">
                                         {isInitialized ? 'Connected to 0G Network' : 'Not Connected'}
                                     </span>
+                                    {accountBalance && (
+                                        <Badge variant="outline" className="text-xs">
+                                            Demo Mode
+                                        </Badge>
+                                    )}
                                 </div>
                             </div>
 

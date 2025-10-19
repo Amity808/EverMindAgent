@@ -172,6 +172,8 @@ export function useZGCompute() {
         transferToFineTuning,
         refreshServices,
         refreshBalance,
-        initialize
+        initialize,
+        provider: zgComputeService.getProvider(),
+        signer: zgComputeService.getSigner()
     }
 }
