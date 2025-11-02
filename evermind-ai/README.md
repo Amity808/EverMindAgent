@@ -66,6 +66,11 @@ This platform uses a **wallet-first approach**:
    NEXT_PUBLIC_0G_RPC_URL=https://evmrpc-testnet.0g.ai/
    NEXT_PUBLIC_0G_INDEXER_RPC=https://indexer-storage-testnet-standard.0g.ai
 
+   # Research History Contract (optional)
+   # Testnet: Set your deployed testnet contract address
+   # Mainnet: 0xb06745a2D9f0073A7a976494929fba3756ccDb21
+   NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT=0x...
+
    # Optional: IPFS fallback
    NEXT_PUBLIC_PINATA_API_KEY=your_pinata_api_key_here
    ```
@@ -140,16 +145,34 @@ evermind-ai/
 
 ### Environment Variables
 
-| Variable                     | Description           | Required |
-| ---------------------------- | --------------------- | -------- |
-| `NEXT_PUBLIC_0G_RPC_URL`     | 0G Network RPC URL    | Yes      |
-| `NEXT_PUBLIC_0G_INDEXER_RPC` | 0G Indexer RPC URL    | Yes      |
-| `NEXT_PUBLIC_PINATA_API_KEY` | IPFS fallback API key | No       |
+| Variable                                | Description                       | Required      |
+| --------------------------------------- | --------------------------------- | ------------- |
+| `NEXT_PUBLIC_0G_RPC_URL`                | 0G Network RPC URL                | Yes           |
+| `NEXT_PUBLIC_0G_INDEXER_RPC`            | 0G Indexer RPC URL                | Yes           |
+| `NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT` | Research History contract address | No (optional) |
+| `NEXT_PUBLIC_PINATA_API_KEY`            | IPFS fallback API key             | No            |
 
 ### Supported Networks
 
 - **Testnet**: 0G Testnet (default)
 - **Mainnet**: 0G Mainnet (production)
+
+### Contract Addresses
+
+#### Research History Contract
+
+- **Mainnet**: `0xb06745a2D9f0073A7a976494929fba3756ccDb21`
+- **Testnet**: Set via `NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT` environment variable
+
+To use the research history feature, set the contract address in your `.env.local`:
+
+```bash
+# For testnet (set your deployed testnet contract address)
+NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT=0x...
+
+# For mainnet (already configured)
+NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT=0xb06745a2D9f0073A7a976494929fba3756ccDb21
+```
 
 ## 🤖 Available AI Services
 

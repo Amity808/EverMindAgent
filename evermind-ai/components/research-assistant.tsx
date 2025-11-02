@@ -139,7 +139,7 @@ export function ResearchAssistant() {
             const insights = parseResearchInsights(responseContent)
             setResearchInsights(insights)
 
-            // Store response on blockchain and IPFS (if available)
+            // Store response on blockchain and 0G Storage (if available)
             if (process.env.NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT && provider && signer && queryId) {
                 console.log('💾 Storing response on blockchain...')
                 const researchData = {
@@ -211,7 +211,7 @@ export function ResearchAssistant() {
                 tags: extractTags(researchQuery),
                 insights: insights.map(i => i.content),
                 dataSources: process.env.NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT && provider && signer
-                    ? ['AI Analysis', '0G Compute Network', 'Blockchain Verified']
+                    ? ['AI Analysis', '0G Compute Network', '0G Storage', 'Blockchain Verified']
                     : ['AI Analysis', '0G Compute Network']
             }
 

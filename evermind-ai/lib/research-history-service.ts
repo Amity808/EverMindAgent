@@ -1,8 +1,8 @@
 import { ethers } from 'ethers'
-import { ipfsService, ResearchData, IPFSUploadResult } from './ipfs-service'
+import { zgStorageService, ResearchData, StorageUploadResult } from './0g-storage-service'
 
 // Re-export ResearchData for external use
-export type { ResearchData } from './ipfs-service'
+export type { ResearchData } from './0g-storage-service'
 
 export interface ResearchSession {
     sessionId: string
@@ -25,7 +25,8 @@ export interface ResearchQuery {
 
 export interface ResearchResponse {
     queryId: string
-    ipfsHash: string
+    storageHash: string // Changed from ipfsHash to storageHash for 0G Storage
+    ipfsHash?: string // Keep for backward compatibility
     verificationHash: string
     cost: number
     timestamp: number
@@ -148,7 +149,7 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
     }
 
     /**
-     * Add research response to blockchain and IPFS
+     * Add research response to blockchain and 0G Storage
      * @param sessionId Session ID
      * @param queryId Query ID
      * @param responseData Complete response data
@@ -161,17 +162,21 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
         try {
             console.log('💾 Storing research response...')
 
-            // Upload to IPFS
-            const ipfsResult: IPFSUploadResult = await ipfsService.uploadResearchData(responseData)
+            // Upload to 0G Storage
+            const storageResult: StorageUploadResult = await zgStorageService.uploadResearchData(
+                responseData,
+                this.provider,
+                this.signer
+            )
 
             // Generate verification hash
-            const verificationHash = ipfsService.generateVerificationHash(responseData)
+            const verificationHash = zgStorageService.generateVerificationHash(responseData)
 
-            // Store on blockchain
+            // Store on blockchain (contract still uses ipfsHash field name for backward compatibility)
             const tx = await this.contract.addResearchResponse(
                 sessionId,
                 queryId,
-                ipfsResult.hash,
+                storageResult.hash,
                 verificationHash,
                 ethers.parseEther(responseData.metadata.cost.toString())
             )
@@ -181,8 +186,9 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
             console.log('✅ Research response stored:', {
                 sessionId,
                 queryId,
-                ipfsHash: ipfsResult.hash,
-                verificationHash
+                storageHash: storageResult.hash,
+                verificationHash,
+                transactionHash: storageResult.transactionHash
             })
         } catch (error) {
             console.error('❌ Failed to store research response:', error)
@@ -257,7 +263,7 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
     }
 
     /**
-     * Get research response with full data from IPFS
+     * Get research response with full data from 0G Storage
      * @param sessionId Session ID
      * @param queryId Query ID
      * @returns Response details with full data
@@ -266,12 +272,15 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
         try {
             const response = await this.contract.getResearchResponse(sessionId, queryId)
 
-            // Retrieve full data from IPFS
-            const fullData = await ipfsService.getResearchData(response.ipfsHash)
+            // Retrieve full data from 0G Storage
+            // The contract field is still named ipfsHash for backward compatibility
+            const storageHash = response.ipfsHash || response.storageHash || response.ipfsHash
+            const fullData = await zgStorageService.getResearchData(storageHash)
 
             return {
                 queryId: response.queryId_.toString(),
-                ipfsHash: response.ipfsHash,
+                storageHash: storageHash,
+                ipfsHash: storageHash, // Keep for backward compatibility
                 verificationHash: response.verificationHash,
                 cost: Number(ethers.formatEther(response.cost)),
                 timestamp: Number(response.timestamp),
@@ -330,11 +339,19 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
     }
 
     /**
-     * Check if IPFS is available
-     * @returns Whether IPFS is accessible
+     * Check if 0G Storage is available
+     * @returns Whether 0G Storage is accessible
+     */
+    async isStorageAvailable(): Promise<boolean> {
+        return await zgStorageService.isAvailable()
+    }
+
+    /**
+     * Check if IPFS is available (deprecated, use isStorageAvailable)
+     * @returns Whether storage is accessible
      */
     async isIPFSAvailable(): Promise<boolean> {
-        return await ipfsService.isAvailable()
+        return await this.isStorageAvailable()
     }
 }
 

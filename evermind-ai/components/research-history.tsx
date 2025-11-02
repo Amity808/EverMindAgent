@@ -146,7 +146,7 @@ export function ResearchHistory({
                     exportedAt: new Date().toISOString()
                 },
                 researchData: {
-                    note: "Research responses are stored on IPFS/local storage. Use the 'View' button to see detailed responses.",
+                    note: "Research responses are stored on 0G Storage/local storage. Use the 'View' button to see detailed responses.",
                     instructions: "To view full research responses: 1) Click the 'View' button 2) Select individual queries to see responses"
                 }
             }
@@ -185,9 +185,9 @@ export function ResearchHistory({
                     totalCost: session.totalCost,
                     exportedAt: new Date().toISOString()
                 },
-                note: "Full research responses are stored on IPFS/local storage.",
+                note: "Full research responses are stored on 0G Storage/local storage.",
                 instructions: "To view actual research responses, use the individual query buttons in the session details view.",
-                responses: "Responses would be loaded here when the blockchain/IPFS integration is fully functional."
+                responses: "Responses would be loaded here when the blockchain/0G Storage integration is fully functional."
             }
 
             const dataStr = JSON.stringify(responseData, null, 2)
@@ -203,7 +203,7 @@ export function ResearchHistory({
             URL.revokeObjectURL(url)
 
             console.log('✅ Research responses structure downloaded')
-            console.log('💡 Note: Full responses require blockchain/IPFS integration')
+            console.log('💡 Note: Full responses require blockchain/0G Storage integration')
         } catch (error) {
             console.error('❌ Failed to download research responses:', error)
         }
@@ -473,9 +473,9 @@ export function ResearchHistory({
                             <CardContent className="space-y-4">
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
-                                        <label className="text-sm font-medium text-muted-foreground">IPFS Hash</label>
+                                        <label className="text-sm font-medium text-muted-foreground">Storage Hash (0G Storage)</label>
                                         <p className="text-sm font-mono bg-muted px-2 py-1 rounded break-all">
-                                            {selectedResponse.ipfsHash}
+                                            {selectedResponse.storageHash || selectedResponse.ipfsHash}
                                         </p>
                                     </div>
                                     <div>
@@ -523,9 +523,14 @@ export function ResearchHistory({
                                         <Shield className="h-4 w-4 mr-2" />
                                         {isVerifying ? 'Verifying...' : 'Verify Response'}
                                     </Button>
-                                    <Button variant="outline">
+                                    <Button variant="outline" onClick={() => {
+                                        const hash = selectedResponse.storageHash || selectedResponse.ipfsHash
+                                        if (hash) {
+                                            window.open(`https://0g.ai/storage/${hash}`, '_blank')
+                                        }
+                                    }}>
                                         <ExternalLink className="h-4 w-4 mr-2" />
-                                        View on IPFS
+                                        View on 0G Storage
                                     </Button>
                                     <Button variant="outline">
                                         <Download className="h-4 w-4 mr-2" />
@@ -593,7 +598,7 @@ export function ResearchHistory({
                                                     <p>No local responses found. To view responses:</p>
                                                     <ol className="list-decimal list-inside mt-2 space-y-1">
                                                         <li>Ensure blockchain contract is deployed</li>
-                                                        <li>Check IPFS configuration</li>
+                                                        <li>Check 0G Storage configuration</li>
                                                         <li>Individual responses will appear here when loaded</li>
                                                     </ol>
                                                 </div>
