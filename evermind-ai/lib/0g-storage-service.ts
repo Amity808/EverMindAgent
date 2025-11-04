@@ -1,5 +1,7 @@
 import { ZgFile, Indexer, Blob as ZgBlob } from '@0glabs/0g-ts-sdk'
 import { ethers } from 'ethers'
+import { getNetworkConfig } from './chain-config'
+import CryptoJS from 'crypto-js'
 
 // Re-export ResearchData interface for compatibility
 export interface ResearchData {
@@ -34,21 +36,15 @@ export class ZGStorageService {
     private indexer: Indexer | null = null
 
     constructor() {
-        // Network Constants - Use environment variables or defaults
-        // Testnet (default)
-        this.rpcUrl = process.env.NEXT_PUBLIC_0G_RPC_URL || 'https://evmrpc-testnet.0g.ai/'
-        this.indexerRpc = process.env.NEXT_PUBLIC_0G_INDEXER_RPC || 'https://indexer-storage-testnet-turbo.0g.ai'
-
-        // Mainnet (if explicitly set)
-        if (process.env.NEXT_PUBLIC_0G_NETWORK === 'mainnet') {
-            this.rpcUrl = process.env.NEXT_PUBLIC_0G_RPC_URL || 'https://evmrpc.0g.ai/'
-            this.indexerRpc = process.env.NEXT_PUBLIC_0G_INDEXER_RPC || 'https://indexer-storage-turbo.0g.ai'
-        }
+        // Use centralized network configuration
+        const networkConfig = getNetworkConfig()
+        this.rpcUrl = networkConfig.storage.rpcUrl
+        this.indexerRpc = networkConfig.storage.indexerRpc
 
         // Initialize indexer
         try {
             this.indexer = new Indexer(this.indexerRpc)
-            console.log('✅ 0G Storage service initialized')
+            console.log(`✅ 0G Storage service initialized on ${networkConfig.network}`)
         } catch (error) {
             console.error('❌ Failed to initialize 0G Storage indexer:', error)
             this.indexer = null
@@ -261,10 +257,9 @@ export class ZGStorageService {
     private createLocalFallback(data: ResearchData): StorageUploadResult {
         console.log('💾 Storing data locally (0G Storage unavailable)')
 
-        // Generate a local hash for the data
-        const crypto = require('crypto')
+        // Generate a local hash for the data using crypto-js (browser-compatible)
         const dataString = JSON.stringify(data)
-        const localHash = crypto.createHash('sha256').update(dataString).digest('hex')
+        const localHash = CryptoJS.SHA256(dataString).toString()
 
         // Store in localStorage as fallback
         try {
@@ -308,9 +303,9 @@ export class ZGStorageService {
      * @returns Verification hash
      */
     generateVerificationHash(data: ResearchData): string {
-        const crypto = require('crypto')
+        // Use crypto-js for browser-compatible hashing
         const dataString = JSON.stringify(data)
-        return crypto.createHash('sha256').update(dataString).digest('hex')
+        return CryptoJS.SHA256(dataString).toString()
     }
 
     /**

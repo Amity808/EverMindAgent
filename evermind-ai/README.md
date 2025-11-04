@@ -67,7 +67,7 @@ This platform uses a **wallet-first approach**:
    NEXT_PUBLIC_0G_INDEXER_RPC=https://indexer-storage-testnet-standard.0g.ai
 
    # Research History Contract (optional)
-   # Testnet: Set your deployed testnet contract address
+   # Testnet: 0x5a6E26085f50731BEBC04Dd7C2Fd56bc75A52c1B
    # Mainnet: 0xb06745a2D9f0073A7a976494929fba3756ccDb21
    NEXT_PUBLIC_RESEARCH_HISTORY_CONTRACT=0x...
 

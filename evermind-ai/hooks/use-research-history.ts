@@ -7,6 +7,7 @@ import {
     ResearchResponse,
     ResearchData
 } from '@/lib/research-history-service'
+import { isChainIdValid, getNetworkConfig } from '@/lib/chain-config'
 
 export interface UseResearchHistoryReturn {
     // State
@@ -196,8 +197,9 @@ export const useResearchHistory = (
                     const userAddress = await signer.getAddress()
                     const network = await signer.provider.getNetwork()
 
-                    if (network.chainId !== 16602n) {
-                        throw new Error('Please switch to 0G Testnet in MetaMask')
+                    if (!isChainIdValid(network.chainId)) {
+                        const networkConfig = getNetworkConfig()
+                        throw new Error(`Please switch to ${networkConfig.chain.chainName} in MetaMask`)
                     }
 
                     const sessionIds = await researchHistoryService.getResearcherSessions(userAddress)

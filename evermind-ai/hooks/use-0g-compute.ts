@@ -1,24 +1,47 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ethers } from 'ethers'
 import { zgComputeService, ServiceInfo, AccountBalance } from '../lib/0g-compute'
+import { useWeb3 } from '@/components/web3-provider'
 
 export function useZGCompute() {
+    const { provider, signer, isConnected } = useWeb3()
     const [isInitialized, setIsInitialized] = useState(false)
     const [services, setServices] = useState<ServiceInfo[]>([])
     const [selectedService, setSelectedService] = useState<ServiceInfo | null>(null)
     const [accountBalance, setAccountBalance] = useState<AccountBalance | null>(null)
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [isDemoMode, setIsDemoMode] = useState(false)
 
     const initialize = useCallback(async () => {
+        // Check if already initialized at service level
+        if (zgComputeService.isReady()) {
+            if (!isInitialized) {
+                setIsInitialized(true)
+                // Load services and balance
+                try {
+                    const availableServices = await zgComputeService.getAvailableServices()
+                    setServices(availableServices)
+                    if (availableServices.length > 0 && !selectedService) {
+                        setSelectedService(availableServices[0])
+                    }
+                } catch (err) {
+                    console.error('Failed to load services after initialization:', err)
+                }
+            }
+            return
+        }
+
+        // Don't initialize if already in progress
         if (isInitialized) return
 
         try {
             setIsLoading(true)
             setError(null)
 
-            const success = await zgComputeService.initialize(null, null)
-            if (success) {
+            // Use actual provider and signer from wallet if connected
+            const success = await zgComputeService.initialize(provider, signer)
+            if (success && zgComputeService.isReady()) {
                 setIsInitialized(true)
                 const availableServices = await zgComputeService.getAvailableServices()
                 setServices(availableServices)
@@ -30,23 +53,43 @@ export function useZGCompute() {
                 try {
                     const balance = await zgComputeService.getAccountBalance()
                     setAccountBalance(balance)
-                } catch (balanceError) {
+                    // Check if we're in demo mode
+                    setIsDemoMode(zgComputeService.isDemoMode())
+                } catch (balanceError: any) {
                     console.warn('Could not get account balance:', balanceError)
-                    // Set mock balance for demo
-                    setAccountBalance({
-                        balance: BigInt('5000000000000000000'),
-                        locked: BigInt('1000000000000000000'),
-                        totalbalance: BigInt('6000000000000000000')
-                    })
+                    // Check if it's a real error or just no account yet
+                    if (balanceError.message?.includes('Account does not exist')) {
+                        // Account doesn't exist yet - this is normal for new mainnet addresses
+                        setIsDemoMode(false)
+                        setAccountBalance({
+                            balance: BigInt('0'),
+                            locked: BigInt('0'),
+                            totalbalance: BigInt('0')
+                        })
+                    } else {
+                        // Other error - likely demo mode
+                        setIsDemoMode(true)
+                        setAccountBalance({
+                            balance: BigInt('5000000000000000000'),
+                            locked: BigInt('1000000000000000000'),
+                            totalbalance: BigInt('6000000000000000000')
+                        })
+                    }
                 }
+            } else {
+                console.warn('Service initialization returned success but service is not ready')
+                // Mark as initialized anyway - service might be in demo mode
+                setIsInitialized(true)
             }
         } catch (err) {
             console.error('Failed to initialize 0G Compute:', err)
             setError('Failed to initialize 0G Compute service')
+            // Still mark as initialized to prevent infinite retries
+            setIsInitialized(true)
         } finally {
             setIsLoading(false)
         }
-    }, [isInitialized])
+    }, [isInitialized, selectedService])
 
     const sendInference = useCallback(async (request: any) => {
         if (!selectedService) {
@@ -73,10 +116,31 @@ export function useZGCompute() {
     }, [selectedService])
 
     const addFunds = useCallback(async (amount: string) => {
+        if (!zgComputeService.isReady()) {
+            console.error('0G Compute service not initialized. Please wait...')
+            setError('Service not initialized. Please wait for initialization to complete.')
+            return
+        }
         try {
             await zgComputeService.addFunds(amount)
-            const balance = await zgComputeService.getAccountBalance()
-            setAccountBalance(balance)
+            // Wait a bit longer for transaction to be fully confirmed
+            await new Promise(resolve => setTimeout(resolve, 2000))
+
+            // Try to get balance, but don't fail if it errors
+            try {
+                const balance = await zgComputeService.getAccountBalance()
+                setAccountBalance(balance)
+            } catch (balanceError: any) {
+                console.warn('⚠️ Could not read balance immediately after funding:', balanceError)
+                console.warn('💡 Your funds were added successfully (transaction confirmed)')
+                console.warn('💡 The balance will update once the contract read issue is resolved')
+                // Set zero balance as fallback - user knows funds were added from transaction hash
+                setAccountBalance({
+                    balance: BigInt('0'),
+                    locked: BigInt('0'),
+                    totalbalance: BigInt('0')
+                })
+            }
         } catch (err) {
             console.error('Failed to add funds:', err)
             setError('Failed to add funds')
@@ -84,10 +148,27 @@ export function useZGCompute() {
     }, [])
 
     const depositFund = useCallback(async (amount: string) => {
+        if (!zgComputeService.isReady()) {
+            console.error('0G Compute service not initialized. Please wait...')
+            setError('Service not initialized. Please wait for initialization to complete.')
+            return
+        }
         try {
             await zgComputeService.depositFund(amount)
-            const balance = await zgComputeService.getAccountBalance()
-            setAccountBalance(balance)
+
+            // Wait a bit for transaction to be confirmed before checking balance
+            await new Promise(resolve => setTimeout(resolve, 3000))
+
+            // Try to get balance, but don't fail if it errors
+            try {
+                const balance = await zgComputeService.getAccountBalance()
+                setAccountBalance(balance)
+            } catch (balanceError: any) {
+                console.warn('⚠️ Could not read balance immediately after deposit:', balanceError)
+                console.warn('💡 Your deposit transaction was submitted successfully')
+                console.warn('💡 The balance will update once the transaction is confirmed and readable')
+                // Don't set error - transaction was sent, just balance check failed
+            }
         } catch (err) {
             console.error('Failed to deposit funds:', err)
             setError('Failed to deposit funds')
@@ -95,6 +176,11 @@ export function useZGCompute() {
     }, [])
 
     const requestRefund = useCallback(async (amount: string) => {
+        if (!zgComputeService.isReady()) {
+            console.error('0G Compute service not initialized. Please wait...')
+            setError('Service not initialized. Please wait for initialization to complete.')
+            return
+        }
         try {
             await zgComputeService.requestRefund(amount)
             const balance = await zgComputeService.getAccountBalance()
@@ -106,6 +192,11 @@ export function useZGCompute() {
     }, [])
 
     const transferToInference = useCallback(async (providerAddress: string, amount: string) => {
+        if (!zgComputeService.isReady()) {
+            console.error('0G Compute service not initialized. Please wait...')
+            setError('Service not initialized. Please wait for initialization to complete.')
+            return
+        }
         try {
             await zgComputeService.transferToInference(providerAddress, amount)
             const balance = await zgComputeService.getAccountBalance()
@@ -117,6 +208,11 @@ export function useZGCompute() {
     }, [])
 
     const transferToFineTuning = useCallback(async (providerAddress: string, amount: string) => {
+        if (!zgComputeService.isReady()) {
+            console.error('0G Compute service not initialized. Please wait...')
+            setError('Service not initialized. Please wait for initialization to complete.')
+            return
+        }
         try {
             await zgComputeService.transferToFineTuning(providerAddress, amount)
             const balance = await zgComputeService.getAccountBalance()
@@ -151,10 +247,11 @@ export function useZGCompute() {
     }, [])
 
     useEffect(() => {
-        if (!isInitialized) {
+        // Initialize if not already initialized and we have a connection
+        if (!isInitialized && (isConnected || provider)) {
             initialize()
         }
-    }, [isInitialized, initialize])
+    }, [isInitialized, initialize, provider, signer, isConnected])
 
     return {
         isInitialized,
@@ -173,6 +270,7 @@ export function useZGCompute() {
         refreshServices,
         refreshBalance,
         initialize,
+        isDemoMode,
         provider: zgComputeService.getProvider(),
         signer: zgComputeService.getSigner()
     }

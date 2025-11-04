@@ -1,636 +1,395 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/utils/Strings.sol";
-import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /**
- * @title EverMind AI - Decentralized Intelligent Personal Assistant
- * @dev Built on 0G AI Layer 1 ecosystem with INFTs for AI agent portability
- *
- * Features:
- * - AI agent minting and management via ERC-7857 INFTs
- * - 0G Compute integration for AI inference
- * - 0G Storage integration for knowledge bases
- * - Encrypted metadata and secure AI agent transfer
- * - AI marketplace and collaboration capabilities
+ * @title ResearchHistory
+ * @dev Smart contract for storing research chat history on blockchain
+ * @author Evermind AI
  */
-contract EverMindAI is ERC721, Ownable, ReentrancyGuard, Pausable {
-    using Strings for uint256;
-
-    // ============ STRUCTS ============
-
-    struct AIAgent {
-        string name;
-        string description;
-        bytes32 modelHash; // Hash of the AI model on 0G Compute
-        bytes32 datasetHash; // Hash of knowledge base on 0G Storage
-        bytes32 metadataHash; // Encrypted metadata hash
-        string encryptedMetadata; // Encrypted metadata URI
-        uint256 creationTimestamp;
-        uint256 lastUsedTimestamp;
-        bool isActive;
-        address creator;
-        uint256 computeCredits; // 0G Compute credits
-        uint256 storageCredits; // 0G Storage credits
-        bool nftStatusAcknowledged; // Whether the agent has acknowledged its NFT status
-    }
-
-    struct AIExecution {
-        uint256 agentId;
-        address user;
-        bytes32 inputHash;
-        bytes32 outputHash;
-        uint256 timestamp;
-        uint256 computeCost;
-        bool isCompleted;
-    }
-
-    struct Collaboration {
-        uint256 agentId1;
-        uint256 agentId2;
-        address initiator;
-        uint256 startTime;
-        bool isActive;
-        bytes32 sharedDataHash;
-    }
-
-    // ============ STATE VARIABLES ============
-
-    mapping(uint256 => AIAgent) public aiAgents;
-    mapping(uint256 => AIExecution) public executions;
-    mapping(uint256 => Collaboration) public collaborations;
-    mapping(address => uint256[]) public userAgents;
-    mapping(bytes32 => bool) public usedProofs;
-
-    // 0G Integration addresses
-    address public ogCompute;
-    address public ogStorage;
-    address public ogDataAvailability;
-
-    // Contract state
-    uint256 private _nextAgentId = 1;
-    uint256 private _nextExecutionId = 1;
-    uint256 private _nextCollaborationId = 1;
-
-    uint256 public mintPrice = 0.000001 ether;
-    uint256 public executionFee = 0.000001 ether;
-    uint256 public computeCreditPrice = 0.000001 ether;
-    uint256 public storageCreditPrice = 0.0000001 ether;
-
-    // ============ EVENTS ============
-
-    event AIAgentMinted(
-        uint256 indexed agentId,
-        address indexed owner,
-        string name,
-        bytes32 modelHash,
-        bytes32 datasetHash
-    );
-
-    event AIExecutionTriggered(
-        uint256 indexed executionId,
-        uint256 indexed agentId,
-        address indexed user,
-        bytes32 inputHash
-    );
-
-    event AIExecutionCompleted(
-        uint256 indexed executionId,
-        bytes32 outputHash,
-        uint256 computeCost
-    );
-
-    event CollaborationStarted(
-        uint256 indexed collaborationId,
-        uint256 indexed agentId1,
-        uint256 indexed agentId2,
-        address initiator
-    );
-
-    event MetadataUpdated(
-        uint256 indexed agentId,
-        bytes32 newMetadataHash,
-        string newEncryptedMetadata
-    );
-
-    event CreditsPurchased(
-        address indexed buyer,
-        uint256 computeCredits,
-        uint256 storageCredits,
-        uint256 totalCost
-    );
-
-    event AgentNFTMinted(
-        uint256 indexed agentId,
-        address indexed owner,
-        string agentName,
-        uint256 tokenId,
-        bytes32 modelHash,
-        bytes32 datasetHash,
+contract ResearchHistory is Ownable, ReentrancyGuard {
+    // Events
+    event ResearchSessionCreated(
+        uint256 indexed sessionId,
+        address indexed researcher,
+        string indexed researchType,
         uint256 timestamp
     );
 
-    event AgentNFTStatusAcknowledged(
-        uint256 indexed agentId,
-        address indexed owner,
-        uint256 timestamp,
-        string acknowledgmentMessage
+    event ResearchQueryAdded(
+        uint256 indexed sessionId,
+        uint256 indexed queryId,
+        string query,
+        string context,
+        uint256 timestamp
     );
 
-    // ============ MODIFIERS ============
+    event ResearchResponseAdded(
+        uint256 indexed sessionId,
+        uint256 indexed queryId,
+        string ipfsHash,
+        string verificationHash,
+        uint256 timestamp
+    );
 
-    modifier onlyAgentOwner(uint256 agentId) {
-        require(ownerOf(agentId) == msg.sender, "Not agent owner");
+    event ResearchSessionCompleted(
+        uint256 indexed sessionId,
+        uint256 totalQueries,
+        uint256 totalCost,
+        uint256 timestamp
+    );
+
+    // Structs
+    struct ResearchQuery {
+        uint256 queryId;
+        string query;
+        string context;
+        uint256 timestamp;
+        bool hasResponse;
+    }
+
+    struct ResearchResponse {
+        uint256 queryId;
+        string ipfsHash; // IPFS hash for full response data
+        string verificationHash; // Hash for verification
+        uint256 cost; // Cost in OG tokens
+        uint256 timestamp;
+        bool verified;
+    }
+
+    struct ResearchSession {
+        uint256 sessionId;
+        address researcher;
+        string researchType;
+        uint256 startTime;
+        uint256 endTime;
+        uint256 totalQueries;
+        uint256 totalCost;
+        bool isActive;
+        mapping(uint256 => ResearchQuery) queries;
+        mapping(uint256 => ResearchResponse) responses;
+    }
+
+    // State variables
+    uint256 private _nextSessionId;
+    uint256 private _nextQueryId;
+    mapping(uint256 => ResearchSession) private _sessions;
+    mapping(address => uint256[]) private _researcherSessions;
+    mapping(string => uint256) private _ipfsHashToQueryId;
+
+    // Constants
+    uint256 public constant MAX_QUERIES_PER_SESSION = 100;
+    uint256 public constant STORAGE_FEE = 0.001 ether; // 0.001 ETH per session
+
+    // Modifiers
+    modifier onlyActiveSession(uint256 sessionId) {
+        require(_sessions[sessionId].isActive, "Session not active");
         _;
     }
 
-    modifier agentExists(uint256 agentId) {
-        require(ownerOf(agentId) != address(0), "Agent does not exist");
+    modifier validSessionOwner(uint256 sessionId) {
+        require(
+            _sessions[sessionId].researcher == msg.sender,
+            "Not session owner"
+        );
         _;
     }
 
-    modifier agentActive(uint256 agentId) {
-        require(aiAgents[agentId].isActive, "Agent is not active");
-        _;
-    }
-
-    // ============ CONSTRUCTOR ============
-
-    constructor(
-        string memory name,
-        string memory symbol,
-        address _ogCompute,
-        address _ogStorage,
-        address _ogDataAvailability
-    ) ERC721(name, symbol) Ownable(msg.sender) {
-        ogCompute = _ogCompute;
-        ogStorage = _ogStorage;
-        ogDataAvailability = _ogDataAvailability;
-    }
-
-    // ============ CORE FUNCTIONS ============
+    constructor() Ownable() {}
 
     /**
-     * @dev Mint a new AI agent as an INFT
-     * @param name AI agent name
-     * @param description AI agent description
-     * @param modelHash Hash of the AI model on 0G Compute
-     * @param datasetHash Hash of knowledge base on 0G Storage
-     * @param encryptedMetadata Encrypted metadata URI
-     * @param metadataHash Hash of encrypted metadata
+     * @dev Create a new research session
+     * @param researchType Type of research (academic, market, technical, competitive)
      */
-    function mintAIAgent(
-        string memory name,
-        string memory description,
-        bytes32 modelHash,
-        bytes32 datasetHash,
-        string memory encryptedMetadata,
-        bytes32 metadataHash
-    ) external payable nonReentrant whenNotPaused returns (uint256) {
-        require(msg.value >= mintPrice, "Insufficient mint fee");
-        require(bytes(name).length > 0, "Name cannot be empty");
-        require(modelHash != bytes32(0), "Invalid model hash");
+    function createResearchSession(
+        string memory researchType
+    ) external payable nonReentrant returns (uint256) {
+        require(msg.value >= STORAGE_FEE, "Insufficient storage fee");
+        require(bytes(researchType).length > 0, "Research type required");
 
-        uint256 agentId = _nextAgentId++;
+        uint256 sessionId = _nextSessionId++;
 
-        AIAgent memory newAgent = AIAgent({
-            name: name,
-            description: description,
-            modelHash: modelHash,
-            datasetHash: datasetHash,
-            metadataHash: metadataHash,
-            encryptedMetadata: encryptedMetadata,
-            creationTimestamp: block.timestamp,
-            lastUsedTimestamp: 0,
-            isActive: true,
-            creator: msg.sender,
-            computeCredits: 100, // Initial credits
-            storageCredits: 100, // Initial credits
-            nftStatusAcknowledged: false
-        });
+        ResearchSession storage session = _sessions[sessionId];
+        session.sessionId = sessionId;
+        session.researcher = msg.sender;
+        session.researchType = researchType;
+        session.startTime = block.timestamp;
+        session.isActive = true;
 
-        aiAgents[agentId] = newAgent;
-        userAgents[msg.sender].push(agentId);
+        _researcherSessions[msg.sender].push(sessionId);
 
-        _safeMint(msg.sender, agentId);
-
-        emit AIAgentMinted(agentId, msg.sender, name, modelHash, datasetHash);
-
-        // Notify the AI agent that it has become an NFT
-        emit AgentNFTMinted(
-            agentId,
+        emit ResearchSessionCreated(
+            sessionId,
             msg.sender,
-            name,
-            agentId,
-            modelHash,
-            datasetHash,
+            researchType,
             block.timestamp
         );
 
-        return agentId;
+        return sessionId;
     }
 
     /**
-     * @dev Execute AI inference using 0G Compute
-     * @param agentId ID of the AI agent to use
-     * @param inputHash Hash of the input data
-     * @param proof Zero-knowledge proof for execution authorization
+     * @dev Add a research query to an active session
+     * @param sessionId The session ID
+     * @param query The research query
+     * @param context Additional context
      */
-    function executeAI(
-        uint256 agentId,
-        bytes32 inputHash,
-        bytes calldata proof
+    function addResearchQuery(
+        uint256 sessionId,
+        string memory query,
+        string memory context
     )
         external
-        payable
-        nonReentrant
-        whenNotPaused
-        agentExists(agentId)
-        agentActive(agentId)
+        onlyActiveSession(sessionId)
+        validSessionOwner(sessionId)
+        returns (uint256)
     {
-        require(msg.value >= executionFee, "Insufficient execution fee");
+        require(bytes(query).length > 0, "Query cannot be empty");
         require(
-            aiAgents[agentId].computeCredits > 0,
-            "Insufficient compute credits"
+            _sessions[sessionId].totalQueries < MAX_QUERIES_PER_SESSION,
+            "Max queries reached"
         );
 
-        // Verify proof (integration with 0G Compute)
-        require(
-            _verifyExecutionProof(agentId, inputHash, proof),
-            "Invalid execution proof"
+        uint256 queryId = _nextQueryId++;
+
+        ResearchQuery storage researchQuery = _sessions[sessionId].queries[
+            queryId
+        ];
+        researchQuery.queryId = queryId;
+        researchQuery.query = query;
+        researchQuery.context = context;
+        researchQuery.timestamp = block.timestamp;
+
+        _sessions[sessionId].totalQueries++;
+
+        emit ResearchQueryAdded(
+            sessionId,
+            queryId,
+            query,
+            context,
+            block.timestamp
         );
 
-        uint256 executionId = _nextExecutionId++;
-
-        AIExecution memory execution = AIExecution({
-            agentId: agentId,
-            user: msg.sender,
-            inputHash: inputHash,
-            outputHash: bytes32(0),
-            timestamp: block.timestamp,
-            computeCost: 1,
-            isCompleted: false
-        });
-
-        executions[executionId] = execution;
-
-        // Deduct compute credits
-        aiAgents[agentId].computeCredits--;
-        aiAgents[agentId].lastUsedTimestamp = block.timestamp;
-
-        emit AIExecutionTriggered(executionId, agentId, msg.sender, inputHash);
-
-        // In a real implementation, this would trigger 0G Compute
-        // and the result would be set via completeExecution
+        return queryId;
     }
 
     /**
-     * @dev Complete an AI execution (called by 0G Compute oracle)
-     * @param executionId ID of the execution to complete
-     * @param outputHash Hash of the AI output
-     * @param computeCost Actual compute cost used
+     * @dev Add a research response to a query
+     * @param sessionId The session ID
+     * @param queryId The query ID
+     * @param ipfsHash IPFS hash of the response data
+     * @param verificationHash Hash for verification
+     * @param cost Cost in OG tokens
      */
-    function completeExecution(
-        uint256 executionId,
-        bytes32 outputHash,
-        uint256 computeCost
-    ) external onlyOwner {
+    function addResearchResponse(
+        uint256 sessionId,
+        uint256 queryId,
+        string memory ipfsHash,
+        string memory verificationHash,
+        uint256 cost
+    ) external onlyActiveSession(sessionId) validSessionOwner(sessionId) {
         require(
-            executions[executionId].isCompleted == false,
-            "Execution already completed"
+            _sessions[sessionId].queries[queryId].queryId != 0,
+            "Query not found"
+        );
+        require(
+            !_sessions[sessionId].queries[queryId].hasResponse,
+            "Response already exists"
+        );
+        require(bytes(ipfsHash).length > 0, "IPFS hash required");
+        require(
+            bytes(verificationHash).length > 0,
+            "Verification hash required"
         );
 
-        executions[executionId].outputHash = outputHash;
-        executions[executionId].computeCost = computeCost;
-        executions[executionId].isCompleted = true;
+        ResearchResponse storage response = _sessions[sessionId].responses[
+            queryId
+        ];
+        response.queryId = queryId;
+        response.ipfsHash = ipfsHash;
+        response.verificationHash = verificationHash;
+        response.cost = cost;
+        response.timestamp = block.timestamp;
+        response.verified = true;
 
-        emit AIExecutionCompleted(executionId, outputHash, computeCost);
+        _sessions[sessionId].queries[queryId].hasResponse = true;
+        _sessions[sessionId].totalCost += cost;
+        _ipfsHashToQueryId[ipfsHash] = queryId;
+
+        emit ResearchResponseAdded(
+            sessionId,
+            queryId,
+            ipfsHash,
+            verificationHash,
+            block.timestamp
+        );
     }
 
     /**
-     * @dev Start collaboration between two AI agents
-     * @param agentId1 First agent ID
-     * @param agentId2 Second agent ID
-     * @param sharedDataHash Hash of shared data
+     * @dev Complete a research session
+     * @param sessionId The session ID
      */
-    function startCollaboration(
-        uint256 agentId1,
-        uint256 agentId2,
-        bytes32 sharedDataHash
+    function completeResearchSession(
+        uint256 sessionId
+    ) external onlyActiveSession(sessionId) validSessionOwner(sessionId) {
+        _sessions[sessionId].isActive = false;
+        _sessions[sessionId].endTime = block.timestamp;
+
+        emit ResearchSessionCompleted(
+            sessionId,
+            _sessions[sessionId].totalQueries,
+            _sessions[sessionId].totalCost,
+            block.timestamp
+        );
+    }
+
+    /**
+     * @dev Get research session details
+     * @param sessionId The session ID
+     */
+    function getResearchSession(
+        uint256 sessionId
     )
         external
-        nonReentrant
-        whenNotPaused
-        agentExists(agentId1)
-        agentExists(agentId2)
+        view
+        returns (
+            uint256 sessionId_,
+            address researcher,
+            string memory researchType,
+            uint256 startTime,
+            uint256 endTime,
+            uint256 totalQueries,
+            uint256 totalCost,
+            bool isActive
+        )
     {
-        require(
-            ownerOf(agentId1) == msg.sender || ownerOf(agentId2) == msg.sender,
-            "Not agent owner"
-        );
-        require(agentId1 != agentId2, "Cannot collaborate with self");
-
-        uint256 collaborationId = _nextCollaborationId++;
-
-        Collaboration memory collaboration = Collaboration({
-            agentId1: agentId1,
-            agentId2: agentId2,
-            initiator: msg.sender,
-            startTime: block.timestamp,
-            isActive: true,
-            sharedDataHash: sharedDataHash
-        });
-
-        collaborations[collaborationId] = collaboration;
-
-        emit CollaborationStarted(
-            collaborationId,
-            agentId1,
-            agentId2,
-            msg.sender
+        ResearchSession storage session = _sessions[sessionId];
+        return (
+            session.sessionId,
+            session.researcher,
+            session.researchType,
+            session.startTime,
+            session.endTime,
+            session.totalQueries,
+            session.totalCost,
+            session.isActive
         );
     }
 
     /**
-     * @dev Update AI agent metadata
-     * @param agentId ID of the agent to update
-     * @param newMetadataHash New metadata hash
-     * @param newEncryptedMetadata New encrypted metadata URI
+     * @dev Get research query details
+     * @param sessionId The session ID
+     * @param queryId The query ID
      */
-    function updateMetadata(
-        uint256 agentId,
-        bytes32 newMetadataHash,
-        string memory newEncryptedMetadata
-    ) external onlyAgentOwner(agentId) agentExists(agentId) {
-        aiAgents[agentId].metadataHash = newMetadataHash;
-        aiAgents[agentId].encryptedMetadata = newEncryptedMetadata;
-
-        emit MetadataUpdated(agentId, newMetadataHash, newEncryptedMetadata);
-    }
-
-    /**
-     * @dev Purchase compute and storage credits
-     * @param computeCredits Number of compute credits to purchase
-     * @param storageCredits Number of storage credits to purchase
-     */
-    function purchaseCredits(
-        uint256 computeCredits,
-        uint256 storageCredits
-    ) external payable nonReentrant whenNotPaused {
-        uint256 totalCost = (computeCredits * computeCreditPrice) +
-            (storageCredits * storageCreditPrice);
-        require(msg.value >= totalCost, "Insufficient payment");
-
-        // Distribute credits to user's agents
-        uint256[] memory userAgentIds = userAgents[msg.sender];
-        if (userAgentIds.length > 0) {
-            uint256 creditsPerAgent = computeCredits / userAgentIds.length;
-            uint256 storagePerAgent = storageCredits / userAgentIds.length;
-
-            for (uint256 i = 0; i < userAgentIds.length; i++) {
-                aiAgents[userAgentIds[i]].computeCredits += creditsPerAgent;
-                aiAgents[userAgentIds[i]].storageCredits += storagePerAgent;
-            }
-        }
-
-        emit CreditsPurchased(
-            msg.sender,
-            computeCredits,
-            storageCredits,
-            totalCost
+    function getResearchQuery(
+        uint256 sessionId,
+        uint256 queryId
+    )
+        external
+        view
+        returns (
+            uint256 queryId_,
+            string memory query,
+            string memory context,
+            uint256 timestamp,
+            bool hasResponse
+        )
+    {
+        ResearchQuery storage researchQuery = _sessions[sessionId].queries[
+            queryId
+        ];
+        return (
+            researchQuery.queryId,
+            researchQuery.query,
+            researchQuery.context,
+            researchQuery.timestamp,
+            researchQuery.hasResponse
         );
     }
 
     /**
-     * @dev Allow AI agent to acknowledge its NFT status
-     * @param agentId ID of the agent
-     * @param acknowledgmentMessage Message from the agent acknowledging its NFT status
+     * @dev Get research response details
+     * @param sessionId The session ID
+     * @param queryId The query ID
      */
-    function acknowledgeNFTStatus(
-        uint256 agentId,
-        string memory acknowledgmentMessage
-    ) external onlyAgentOwner(agentId) agentExists(agentId) {
-        require(
-            !aiAgents[agentId].nftStatusAcknowledged,
-            "NFT status already acknowledged"
-        );
-
-        aiAgents[agentId].nftStatusAcknowledged = true;
-
-        emit AgentNFTStatusAcknowledged(
-            agentId,
-            msg.sender,
-            block.timestamp,
-            acknowledgmentMessage
+    function getResearchResponse(
+        uint256 sessionId,
+        uint256 queryId
+    )
+        external
+        view
+        returns (
+            uint256 queryId_,
+            string memory ipfsHash,
+            string memory verificationHash,
+            uint256 cost,
+            uint256 timestamp,
+            bool verified
+        )
+    {
+        ResearchResponse storage response = _sessions[sessionId].responses[
+            queryId
+        ];
+        return (
+            response.queryId,
+            response.ipfsHash,
+            response.verificationHash,
+            response.cost,
+            response.timestamp,
+            response.verified
         );
     }
 
-    // ============ VIEW FUNCTIONS ============
-
     /**
-     * @dev Get AI agent details
-     * @param agentId ID of the agent
-     * @return AI agent struct
+     * @dev Get all session IDs for a researcher
+     * @param researcher The researcher address
      */
-    function getAIAgent(
-        uint256 agentId
-    ) external view agentExists(agentId) returns (AIAgent memory) {
-        return aiAgents[agentId];
-    }
-
-    /**
-     * @dev Get user's AI agents
-     * @param user Address of the user
-     * @return Array of agent IDs
-     */
-    function getUserAgents(
-        address user
+    function getResearcherSessions(
+        address researcher
     ) external view returns (uint256[] memory) {
-        return userAgents[user];
+        return _researcherSessions[researcher];
     }
 
     /**
-     * @dev Get execution details
-     * @param executionId ID of the execution
-     * @return Execution struct
+     * @dev Verify response integrity
+     * @param sessionId The session ID
+     * @param queryId The query ID
+     * @param responseData The response data to verify
      */
-    function getExecution(
-        uint256 executionId
-    ) external view returns (AIExecution memory) {
-        return executions[executionId];
-    }
+    function verifyResponse(
+        uint256 sessionId,
+        uint256 queryId,
+        string memory responseData
+    ) external view returns (bool) {
+        ResearchResponse storage response = _sessions[sessionId].responses[
+            queryId
+        ];
+        if (response.queryId == 0) return false;
 
-    /**
-     * @dev Get collaboration details
-     * @param collaborationId ID of the collaboration
-     * @return Collaboration struct
-     */
-    function getCollaboration(
-        uint256 collaborationId
-    ) external view returns (Collaboration memory) {
-        return collaborations[collaborationId];
-    }
-
-    /**
-     * @dev Get token URI for INFT metadata
-     * @param tokenId Token ID
-     * @return Token URI
-     */
-    function tokenURI(
-        uint256 tokenId
-    ) public view virtual override returns (string memory) {
-        require(
-            ownerOf(tokenId) != address(0),
-            "ERC721Metadata: URI query for nonexistent token"
-        );
-
-        AIAgent memory agent = aiAgents[tokenId];
+        // Simple hash verification (in production, use proper cryptographic verification)
+        string memory calculatedHash = string(abi.encodePacked(responseData));
         return
-            string(
-                abi.encodePacked(
-                    "data:application/json;base64,",
-                    _base64Encode(
-                        bytes(
-                            string(
-                                abi.encodePacked(
-                                    '{"name":"',
-                                    agent.name,
-                                    '",',
-                                    '"description":"',
-                                    agent.description,
-                                    '",',
-                                    '"attributes":[',
-                                    '{"trait_type":"Model Hash","value":"',
-                                    _bytes32ToString(agent.modelHash),
-                                    '"},',
-                                    '{"trait_type":"Dataset Hash","value":"',
-                                    _bytes32ToString(agent.datasetHash),
-                                    '"},',
-                                    '{"trait_type":"Creation Date","value":"',
-                                    agent.creationTimestamp.toString(),
-                                    '"},',
-                                    '{"trait_type":"Compute Credits","value":"',
-                                    agent.computeCredits.toString(),
-                                    '"},',
-                                    '{"trait_type":"Storage Credits","value":"',
-                                    agent.storageCredits.toString(),
-                                    '"},',
-                                    '{"trait_type":"NFT Status Acknowledged","value":"',
-                                    agent.nftStatusAcknowledged ? "Yes" : "No",
-                                    '"}',
-                                    "]}"
-                                )
-                            )
-                        )
-                    )
-                )
-            );
-    }
-
-    // ============ INTERNAL FUNCTIONS ============
-
-    /**
-     * @dev Verify execution proof (placeholder for 0G Compute integration)
-     */
-    function _verifyExecutionProof(
-        uint256 agentId,
-        bytes32 inputHash,
-        bytes calldata proof
-    ) internal returns (bool) {
-        // In real implementation, this would verify against 0G Compute
-        // For now, we'll use a simple hash-based verification
-        bytes32 proofHash = keccak256(
-            abi.encodePacked(agentId, inputHash, proof)
-        );
-
-        if (usedProofs[proofHash]) {
-            return false; // Proof already used
-        }
-
-        usedProofs[proofHash] = true;
-        return true;
+            keccak256(bytes(calculatedHash)) ==
+            keccak256(bytes(response.verificationHash));
     }
 
     /**
-     * @dev Base64 encoding helper
-     */
-    function _base64Encode(
-        bytes memory data
-    ) internal pure returns (string memory) {
-        // Simplified base64 encoding - in production use a proper library
-        return string(data);
-    }
-
-    /**
-     * @dev Convert bytes32 to string
-     */
-    function _bytes32ToString(
-        bytes32 _bytes32
-    ) internal pure returns (string memory) {
-        uint8 i = 0;
-        while (i < 32 && _bytes32[i] != 0) {
-            i++;
-        }
-        bytes memory bytesArray = new bytes(i);
-        for (i = 0; i < 32 && _bytes32[i] != 0; i++) {
-            bytesArray[i] = _bytes32[i];
-        }
-        return string(bytesArray);
-    }
-
-    // ============ ADMIN FUNCTIONS ============
-
-    /**
-     * @dev Update 0G integration addresses
-     */
-    function updateOGAddresses(
-        address _ogCompute,
-        address _ogStorage,
-        address _ogDataAvailability
-    ) external onlyOwner {
-        ogCompute = _ogCompute;
-        ogStorage = _ogStorage;
-        ogDataAvailability = _ogDataAvailability;
-    }
-
-    /**
-     * @dev Update pricing
-     */
-    function updatePricing(
-        uint256 _mintPrice,
-        uint256 _executionFee,
-        uint256 _computeCreditPrice,
-        uint256 _storageCreditPrice
-    ) external onlyOwner {
-        mintPrice = _mintPrice;
-        executionFee = _executionFee;
-        computeCreditPrice = _computeCreditPrice;
-        storageCreditPrice = _storageCreditPrice;
-    }
-
-    /**
-     * @dev Pause/unpause contract
-     */
-    function setPaused(bool _paused) external onlyOwner {
-        if (_paused) {
-            _pause();
-        } else {
-            _unpause();
-        }
-    }
-
-    /**
-     * @dev Withdraw contract balance
+     * @dev Withdraw contract balance (owner only)
      */
     function withdraw() external onlyOwner {
         uint256 balance = address(this).balance;
-        require(balance > 0, "No balance to withdraw");
+        require(balance > 0, "No funds to withdraw");
 
-        (bool success, ) = payable(owner()).call{value: balance}("");
-        require(success, "Withdrawal failed");
+        payable(owner()).transfer(balance);
+    }
+
+    /**
+     * @dev Get contract balance
+     */
+    function getContractBalance() external view returns (uint256) {
+        return address(this).balance;
     }
 }
+

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { useWeb3 } from "@/components/web3-provider"
 import { Wallet, LogOut, Loader2 } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { TESTNET_CONFIG, MAINNET_CONFIG } from "@/lib/chain-config"
 
 export function WalletConnectButton() {
   const { account, isConnected, isConnecting, connect, disconnect, chainId } = useWeb3()
@@ -13,15 +14,24 @@ export function WalletConnectButton() {
   }
 
   const getChainName = (chainId: number | null) => {
+    if (!chainId) return "Not Connected"
+
+    // Check 0G networks
+    if (chainId === TESTNET_CONFIG.chain.chainId) {
+      return TESTNET_CONFIG.chain.chainName
+    }
+    if (chainId === MAINNET_CONFIG.chain.chainId) {
+      return MAINNET_CONFIG.chain.chainName
+    }
+
+    // Other common networks
     switch (chainId) {
       case 1:
         return "Ethereum"
-      case 16602:
-        return "0G Network"
       case 11155111:
         return "Sepolia"
       default:
-        return "Unknown Network"
+        return `Chain ${chainId}`
     }
   }
 

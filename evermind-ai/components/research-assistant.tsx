@@ -52,6 +52,7 @@ export function ResearchAssistant() {
         transferToFineTuning,
         refreshServices,
         refreshBalance,
+        isDemoMode,
         provider,
         signer
     } = useZGCompute()
@@ -780,7 +781,7 @@ Format your response with clear sections and competitive insights.`
                                     <span className="text-sm">
                                         {isInitialized ? 'Connected to 0G Network' : 'Not Connected'}
                                     </span>
-                                    {accountBalance && (
+                                    {isDemoMode && (
                                         <Badge variant="outline" className="text-xs">
                                             Demo Mode
                                         </Badge>

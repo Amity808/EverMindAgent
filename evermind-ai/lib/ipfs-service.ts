@@ -1,4 +1,5 @@
 // Using Pinata for IPFS instead of ipfs-http-client
+import CryptoJS from 'crypto-js'
 
 export interface ResearchData {
     sessionId: string
@@ -167,10 +168,9 @@ export class IPFSService {
     private createLocalFallback(data: ResearchData): IPFSUploadResult {
         console.log('💾 Storing data locally (IPFS unavailable)')
 
-        // Generate a local hash for the data
-        const crypto = require('crypto')
+        // Generate a local hash for the data using crypto-js (browser-compatible)
         const dataString = JSON.stringify(data)
-        const localHash = crypto.createHash('sha256').update(dataString).digest('hex')
+        const localHash = CryptoJS.SHA256(dataString).toString()
 
         // Store in localStorage as fallback
         try {
@@ -241,9 +241,9 @@ export class IPFSService {
      * @returns Verification hash
      */
     generateVerificationHash(data: ResearchData): string {
-        const crypto = require('crypto')
+        // Use crypto-js for browser-compatible hashing
         const dataString = JSON.stringify(data)
-        return crypto.createHash('sha256').update(dataString).digest('hex')
+        return CryptoJS.SHA256(dataString).toString()
     }
 
     /**

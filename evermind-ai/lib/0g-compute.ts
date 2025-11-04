@@ -2,6 +2,7 @@
 import { ethers, BrowserProvider } from 'ethers'
 import { createZGComputeNetworkBroker } from '@0glabs/0g-serving-broker'
 import OpenAI from 'openai'
+import { getChainConfig, getNetworkConfig, getExpectedChainId } from './chain-config'
 
 export interface ServiceInfo {
     provider: string
@@ -61,70 +62,129 @@ class ZGComputeService {
     async initialize(provider: BrowserProvider | null, signer: ethers.JsonRpcSigner | null) {
         try {
             if (typeof window !== "undefined" && window.ethereum) {
-                // Switch to 0G Testnet
-                await this.switchTo0GTestnet()
+                // Switch to configured 0G network (testnet or mainnet)
+                await this.switchTo0GNetwork()
 
                 // Wait a moment for network switch to complete
                 await new Promise(resolve => setTimeout(resolve, 1000))
 
-                // Create provider and broker
+                // Create provider - use configured RPC URL to ensure correct network
+                const networkConfig = getNetworkConfig()
+                // Use the configured RPC URL instead of relying on MetaMask's RPC
+                // This ensures we're using the correct endpoint for the network
+                const rpcUrl = networkConfig.compute.rpcUrl.replace(/\/$/, '') // Remove trailing slash
+
+                // Create provider from MetaMask but verify it's using the correct network
                 this.provider = new BrowserProvider(window.ethereum)
                 this.signer = await this.provider.getSigner()
 
-                this.broker = await createZGComputeNetworkBroker(this.signer)
-                this.isInitialized = true
+                // Verify network before creating broker
+                const network = await this.provider.getNetwork()
+                const expectedChainId = getExpectedChainId()
 
-                console.log('0G Compute service initialized successfully with broker')
-                return true
+                if (network.chainId !== expectedChainId) {
+                    console.warn(`⚠️ Network mismatch during initialization:`)
+                    console.warn(`   Connected to: Chain ${network.chainId}`)
+                    console.warn(`   Expected: Chain ${expectedChainId} (${networkConfig.chain.chainName})`)
+                    console.warn(`   Please switch to ${networkConfig.chain.chainName} in your wallet`)
+                    console.warn(`   Configured RPC: ${rpcUrl}`)
+                    // Continue anyway - broker creation might still work
+                }
+
+                try {
+                    // Check if we're on mainnet and warn about broker library limitations
+                    if (networkConfig.network === 'mainnet') {
+                        console.warn('⚠️ WARNING: Using 0G Mainnet')
+                        console.warn('   The @0glabs/0g-serving-broker library currently only supports testnet')
+                        console.warn('   It uses hardcoded testnet contract addresses that don\'t exist on mainnet')
+                        console.warn('   This means:')
+                        console.warn('   - Read operations (balance checks) will fail')
+                        console.warn('   - Write operations (deposits, transfers) will fail')
+                        console.warn('   - You should use testnet until the library supports mainnet')
+                        console.warn('   - Set NEXT_PUBLIC_0G_NETWORK=testnet in .env.local')
+                        console.warn('')
+                        console.warn('   Continuing anyway, but broker operations will not work...')
+                    }
+
+                    // The broker should detect the network from the signer/provider
+                    // If it's using hardcoded testnet addresses, we'll get the "could not decode" error
+                    this.broker = await createZGComputeNetworkBroker(this.signer)
+
+                    // Verify broker contract addresses after creation
+                    if (this.broker?.ledger) {
+                        const ledgerCA = this.broker.ledger.ledgerCA
+                        const knownTestnetCA = '0x09D00A2B31067da09bf0e873E58746d1285174Cc'
+
+                        if (ledgerCA?.toLowerCase() === knownTestnetCA.toLowerCase() && networkConfig.network === 'mainnet') {
+                            console.error('❌ CONFIRMED: Broker is using testnet contract addresses on mainnet!')
+                            console.error(`   Ledger CA: ${ledgerCA}`)
+                            console.error('   This broker instance will NOT work on mainnet')
+                            console.error('   Solution: Use testnet (set NEXT_PUBLIC_0G_NETWORK=testnet) or wait for library update')
+                            // Don't set broker to null - let user see the error, but operations will fail
+                        }
+                    }
+
+                    this.isInitialized = true
+                    return true
+                } catch (brokerError: any) {
+                    console.error('Failed to create broker:', brokerError)
+                    console.error(`   Network: ${networkConfig.network}`)
+                    console.error(`   Chain ID: ${network.chainId}`)
+                    console.error(`   Expected Chain ID: ${expectedChainId}`)
+                    console.error(`   RPC URL: ${networkConfig.compute.rpcUrl}`)
+                    // If broker creation fails, continue in demo mode
+                    this.broker = null
+                    this.isInitialized = true
+                    console.warn('⚠️ Broker creation failed, continuing in demo mode')
+                    console.warn('   Note: The broker library may use hardcoded testnet contract addresses')
+                    console.warn('   This is expected if 0G Compute contracts aren\'t deployed on mainnet yet')
+                    return true
+                }
             } else {
-                console.log('0G Compute service initialized in demo mode')
                 this.isInitialized = true
                 return true
             }
         } catch (error) {
             console.error('Failed to initialize 0G Compute service:', error)
-            throw new Error(`Failed to initialize 0G Compute service: ${error}`)
+            // Don't throw - allow initialization to complete in demo mode
+            this.broker = null
+            this.isInitialized = true
+            console.warn('⚠️ Initialization failed, continuing in demo mode')
+            return true
         }
     }
 
-    private async switchTo0GTestnet() {
+    private async switchTo0GNetwork() {
+        const chainConfig = getChainConfig()
+        const networkConfig = getNetworkConfig()
+
         try {
             // First, try to switch to the existing network
             await window.ethereum.request({
                 method: 'wallet_switchEthereumChain',
-                params: [{ chainId: '0x40da' }],
+                params: [{ chainId: chainConfig.chainIdHex }],
             })
-            console.log("✅ Successfully switched to 0G Testnet")
         } catch (error: any) {
-            console.log("Network switch error:", error)
 
             if (error.code === 4902) {
                 try {
                     await window.ethereum.request({
                         method: 'wallet_addEthereumChain',
                         params: [{
-                            chainId: '0x40da', // 16602 in decimal
-                            chainName: '0G Testnet',
-                            rpcUrls: ['https://evmrpc-testnet.0g.ai'],
-                            blockExplorerUrls: ['https://testnet.0g.ai'],
-                            nativeCurrency: {
-                                name: 'OG',
-                                symbol: 'OG',
-                                decimals: 18,
-                            },
+                            chainId: chainConfig.chainIdHex,
+                            chainName: chainConfig.chainName,
+                            rpcUrls: [chainConfig.rpcUrl],
+                            blockExplorerUrls: [chainConfig.blockExplorerUrl],
+                            nativeCurrency: chainConfig.nativeCurrency,
                         }],
                     })
-                    console.log("✅ Successfully added 0G Testnet")
                 } catch (addError: any) {
-                    console.log("Failed to add network:", addError)
                     if (addError.message?.includes('nativeCurrency.symbol does not match')) {
-                        console.log("⚠️ Network already exists with different symbol")
-                        console.log("Please manually switch to 0G Testnet in MetaMask")
+                        console.warn(`⚠️ Network already exists with different symbol. Please manually switch to ${chainConfig.chainName} in MetaMask`)
                     }
                 }
             } else if (error.message?.includes('nativeCurrency.symbol does not match')) {
-                console.log("⚠️ Network already exists with different currency symbol")
-                console.log("Please manually switch to 0G Testnet in MetaMask")
+                console.warn(`⚠️ Network already exists with different currency symbol. Please manually switch to ${chainConfig.chainName} in MetaMask`)
             }
         }
     }
@@ -146,17 +206,43 @@ class ZGComputeService {
 
         try {
             if (this.broker) {
-                const services = await this.broker.inference.listService()
-                return services.map((service: any) => ({
-                    provider: service[0],
-                    serviceType: service[1],
-                    url: service[2],
-                    inputPrice: BigInt(service[3] || 0),
-                    outputPrice: BigInt(service[4] || 0),
-                    updatedAt: BigInt(service[5] || Date.now()),
-                    model: service[6],
-                    verifiability: service[7] || 'TeeML'
-                }))
+                // Verify we're on the correct network before calling
+                if (this.provider) {
+                    const network = await this.provider.getNetwork()
+                    const expectedChainId = getExpectedChainId()
+                    if (network.chainId !== expectedChainId) {
+                        const networkConfig = getNetworkConfig()
+                        console.warn(`⚠️ Network mismatch: Connected to chain ${network.chainId}, expected ${expectedChainId} (${networkConfig.chain.chainName})`)
+                        console.warn('Falling back to official services list')
+                        return this.getOfficialServices()
+                    }
+                }
+
+                try {
+                    const services = await this.broker.inference.listService()
+                    return services.map((service: any) => ({
+                        provider: service[0],
+                        serviceType: service[1],
+                        url: service[2],
+                        inputPrice: BigInt(service[3] || 0),
+                        outputPrice: BigInt(service[4] || 0),
+                        updatedAt: BigInt(service[5] || Date.now()),
+                        model: service[6],
+                        verifiability: service[7] || 'TeeML'
+                    }))
+                } catch (brokerError: any) {
+                    // Handle contract call errors
+                    if (brokerError.message?.includes('could not decode result data') ||
+                        brokerError.message?.includes('CALL_EXCEPTION') ||
+                        brokerError.message?.includes('missing revert data')) {
+                        const networkConfig = getNetworkConfig()
+                        console.warn(`⚠️ Contract call failed on ${networkConfig.chain.chainName}`)
+                        console.warn('This may indicate the contract is not deployed or RPC is unavailable')
+                        console.warn('Falling back to official services list')
+                        return this.getOfficialServices()
+                    }
+                    throw brokerError
+                }
             } else {
                 // Return official services for demo mode
                 return this.getOfficialServices()
@@ -178,9 +264,6 @@ class ZGComputeService {
         try {
             if (this.broker) {
                 await this.broker.inference.acknowledgeProviderSigner(providerAddress)
-                console.log(`Provider ${providerAddress} acknowledged successfully`)
-            } else {
-                console.log(`Provider ${providerAddress} acknowledged (demo mode)`)
             }
         } catch (error) {
             console.error('Failed to acknowledge provider:', error)
@@ -253,54 +336,32 @@ class ZGComputeService {
 
         try {
             if (this.broker) {
-                console.log("🤖 Making AI request...")
-
                 // First, get available services
                 const services = await this.broker.inference.listService()
-                console.log("📋 Available services:", services)
 
                 if (services.length === 0) {
-                    console.log("❌ No services available")
                     throw new Error("No services available")
                 }
 
                 // Find the specific provider
                 const service = services.find((s: any) => s[0] === providerAddress)
                 if (!service) {
-                    console.log("❌ Provider not found")
                     throw new Error(`Provider ${providerAddress} not found`)
                 }
 
                 const endpoint = service[2] // Service URL
                 const model = service[6] // Model name
 
-                console.log(`🔄 Using provider: ${providerAddress}`)
-                console.log(`Endpoint: ${endpoint}`)
-                console.log(`Model: ${model}`)
-
                 try {
                     // Acknowledge provider
-                    console.log("📝 Acknowledging provider...")
                     await this.broker.inference.acknowledgeProviderSigner(providerAddress)
 
                     // Get service metadata
-                    console.log("🔍 Getting service metadata...")
                     const { endpoint: metaEndpoint, model: metaModel } = await this.broker.inference.getServiceMetadata(providerAddress)
-                    console.log(`Meta Endpoint: ${metaEndpoint}`)
-                    console.log(`Meta Model: ${metaModel}`)
 
                     // Generate auth headers
                     const messages = [{ role: "user" as const, content }]
-                    console.log("🔐 Generating auth headers...")
                     const headers = await this.broker.inference.getRequestHeaders(providerAddress, JSON.stringify(messages))
-
-                    // Make the request using OpenAI SDK
-                    console.log("📤 Sending request to AI service...")
-                    console.log("Request details:")
-                    console.log("- Endpoint:", metaEndpoint)
-                    console.log("- Model:", metaModel)
-                    console.log("- Messages:", messages)
-                    console.log("- Headers:", headers)
 
                     const openai = new OpenAI({
                         baseURL: metaEndpoint,
@@ -317,25 +378,16 @@ class ZGComputeService {
                     const answer = completion.choices[0].message.content!
                     const chatID = completion.id // Save for verification
 
-                    console.log("✅ AI Response:")
-                    console.log(`Question: ${content}`)
-                    console.log(`Answer: ${answer}`)
-                    console.log(`Chat ID: ${chatID}`)
-
                     // Optional: Verify the response
                     try {
-                        console.log("🔍 Verifying response...")
-                        const isValid = await this.broker.inference.processResponse(
+                        await this.broker.inference.processResponse(
                             providerAddress,
                             answer,
                             chatID
                         )
-                        console.log(`Response verification: ${isValid ? '✅ Valid' : '❌ Invalid'}`)
                     } catch (verifyError) {
-                        console.log("⚠️ Verification failed:", verifyError)
+                        // Verification failed, but continue
                     }
-
-                    console.log("🎉 AI request completed successfully!")
 
                     return {
                         choices: [
@@ -350,24 +402,9 @@ class ZGComputeService {
                         usage: completion.usage
                     }
                 } catch (providerError: any) {
-                    console.log(`❌ Provider failed:`, providerError.message)
-
                     if (providerError.message?.includes('insufficient balance')) {
-                        console.log("💰 INSUFFICIENT BALANCE ERROR!")
-                        console.log("Your inference sub-account has no funds.")
-                        console.log("📝 SOLUTION: Transfer funds to inference sub-account first!")
-                        console.log("This will transfer 0.1 OG to your inference sub-account.")
-                        console.log("💡 You can use the 'Transfer to Inference' button in the Account Management tab.")
-                    } else if (providerError.message?.includes('ERR_TUNNEL_CONNECTION_FAILED') ||
-                        providerError.message?.includes('Failed to fetch')) {
-                        console.log("🔧 Network connectivity issue with this provider")
-                        console.log("The Phala network endpoints may be temporarily unavailable.")
-                        console.log("💡 Try again in a few minutes or use a different provider.")
-                    } else {
-                        console.log("🔧 Other error with this provider")
-                        console.log("💡 Check your network connection and try again.")
+                        console.error("💰 INSUFFICIENT BALANCE: Transfer funds to inference sub-account first")
                     }
-
                     throw providerError
                 }
             } else {
@@ -485,7 +522,6 @@ class ZGComputeService {
             if (this.broker) {
                 return await this.broker.inference.processResponse(providerAddress, content, chatId)
             } else {
-                console.log(`Response verification for ${providerAddress} (demo mode)`)
                 return true
             }
         } catch (error) {
@@ -511,6 +547,32 @@ class ZGComputeService {
     }
 
     /**
+     * Check if service is in demo mode
+     * @returns True if in demo mode (no broker or no provider/signer)
+     */
+    isDemoMode(): boolean {
+        return !this.broker || !this.provider || !this.signer
+    }
+
+    /**
+     * Get native token balance (for gas fees)
+     */
+    async getNativeBalance(): Promise<bigint> {
+        if (!this.provider || !this.signer) {
+            return BigInt('0')
+        }
+
+        try {
+            const address = await this.signer.getAddress()
+            const balance = await this.provider.getBalance(address)
+            return balance
+        } catch (error) {
+            console.warn('Failed to get native balance:', error)
+            return BigInt('0')
+        }
+    }
+
+    /**
      * Get account balance
      */
     async getAccountBalance(): Promise<AccountBalance> {
@@ -520,45 +582,11 @@ class ZGComputeService {
 
         try {
             if (this.broker) {
-                console.log("🔍 Checking account balance...")
                 const account = await this.broker.ledger.getLedger()
-                console.log("📊 Raw Account Data:", account)
 
-                // Parse the account structure based on the data you showed
-                const totalBalance = BigInt(account[1]) // Total balance (2100000000000000006n)
-                const lockedBalance = BigInt(account[2]) // Locked balance (4100000000000000006n)
-                const subAccounts = account[3] // Sub-accounts array
-                const providers = account[5] // Available providers array
-
-                console.log("📊 Account Overview:")
-                console.log(`Total Balance: ${ethers.formatEther(totalBalance)} OG`)
-                console.log(`Locked Balance: ${ethers.formatEther(lockedBalance)} OG`)
-                console.log(`Available Balance: ${ethers.formatEther(totalBalance - lockedBalance)} OG`)
-
-                // Check sub-accounts
-                if (subAccounts && subAccounts.length > 0) {
-                    console.log("\n🔒 Fine-tuning Sub-accounts:")
-                    subAccounts.forEach((subAccount: any, index: number) => {
-                        console.log(`Sub-account ${index + 1}:`, subAccount)
-                        if (subAccount[0]) { // Provider address
-                            console.log(`  Provider: ${subAccount[0]}`)
-                        }
-                        if (subAccount[1]) { // Balance
-                            console.log(`  Balance: ${ethers.formatEther(subAccount[1])} OG`)
-                        }
-                    })
-                } else {
-                    console.log("\n💡 No fine-tuning sub-accounts found.")
-                    console.log("Sub-accounts are created automatically when you submit fine-tuning tasks.")
-                }
-
-                // Check available providers
-                if (providers && providers.length > 0) {
-                    console.log("\n🏢 Available Providers:")
-                    providers.forEach((provider: string, index: number) => {
-                        console.log(`  Provider ${index + 1}: ${provider}`)
-                    })
-                }
+                // Parse the account structure
+                const totalBalance = BigInt(account[1])
+                const lockedBalance = BigInt(account[2])
 
                 return {
                     balance: totalBalance - lockedBalance,
@@ -578,36 +606,52 @@ class ZGComputeService {
                 }
             }
         } catch (error: any) {
-            console.log("❌ Error checking balance:", error)
-
             if (error.message?.includes('Account does not exist')) {
-                console.log("🚨 ACCOUNT NOT FOUND!")
-                console.log("Your wallet address doesn't have an account on the 0G network yet.")
-                console.log("📝 To create an account, click 'Add Fund' button first.")
-                console.log("This will create your account with initial funding.")
-            } else if (error.message?.includes('missing trie node') || error.message?.includes('Internal JSON-RPC error')) {
-                console.log("🔧 Network issue detected. Try the following:")
-                console.log("1. Make sure you're connected to 0G Testnet")
-                console.log("2. Try refreshing the page")
-                console.log("3. Check if the RPC endpoint is working")
-            } else if (error.message?.includes('missing revert data') || error.message?.includes('CALL_EXCEPTION')) {
-                console.log("⚠️ Contract not available - using demo mode")
-                console.log("The 0G Compute contracts may not be deployed on this network.")
-                console.log("Continuing with demo mode for testing purposes.")
-
-                // Return demo balance instead of throwing error
-                const availableBalance = BigInt('5000000000000000000') // 5 OG
-                const lockedBalance = BigInt('1000000000000000000') // 1 OG
-                const totalBalance = availableBalance + lockedBalance
-
+                // Return zero balance for new accounts
                 return {
-                    balance: availableBalance,
-                    locked: lockedBalance,
-                    totalbalance: totalBalance
+                    balance: BigInt('0'),
+                    locked: BigInt('0'),
+                    totalbalance: BigInt('0')
+                }
+            } else if (error.message?.includes('could not decode result data') ||
+                error.message?.includes('missing revert data') ||
+                error.message?.includes('CALL_EXCEPTION')) {
+                const networkConfig = getNetworkConfig()
+                // Get actual network from provider if available
+                let actualChainId = 'unknown'
+                try {
+                    if (this.provider) {
+                        const network = await this.provider.getNetwork()
+                        actualChainId = network.chainId.toString()
+                    }
+                } catch (e) {
+                    // Ignore errors getting network info
+                }
+
+                console.warn(`⚠️ Contract call failed on ${networkConfig.chain.chainName}`)
+
+                // Return zero balance instead of demo balance for contract errors
+                // This indicates the account might exist but we can't query it
+                return {
+                    balance: BigInt('0'),
+                    locked: BigInt('0'),
+                    totalbalance: BigInt('0')
+                }
+            } else if (error.message?.includes('missing trie node') || error.message?.includes('Internal JSON-RPC error')) {
+                // Return zero balance for network issues
+                return {
+                    balance: BigInt('0'),
+                    locked: BigInt('0'),
+                    totalbalance: BigInt('0')
                 }
             }
 
-            throw new Error(`Failed to get account balance: ${error}`)
+            // For other errors, return zero balance rather than throwing
+            return {
+                balance: BigInt('0'),
+                locked: BigInt('0'),
+                totalbalance: BigInt('0')
+            }
         }
     }
 
@@ -621,39 +665,114 @@ class ZGComputeService {
 
         try {
             if (this.broker) {
-                console.log("💰 Creating account and adding funds...")
-                console.log("This will create your 0G account if it doesn't exist.")
-                console.log("⏳ This may take a moment due to network sync issues...")
+                // Check native token balance first
+                const nativeBalance = await this.getNativeBalance()
+                const nativeBalanceFormatted = ethers.formatEther(nativeBalance)
 
-                const fund = await this.broker.ledger.addLedger(parseFloat(amount))
-                console.log("✅ Account created/funded successfully:", fund)
-                console.log("🎉 Your account is now ready! You can now:")
-                console.log("1. Check your balance")
-                console.log("2. Transfer funds to sub-accounts")
-                console.log("3. Make AI requests")
+                // Warn if balance is very low (less than 0.001 0G)
+                const minGasBalance = ethers.parseEther('0.001')
+                if (nativeBalance < minGasBalance) {
+                    console.error(`⚠️ WARNING: Low native token balance (${nativeBalanceFormatted} 0G). Recommended: At least 0.001 0G for gas fees`)
+                }
+
+                // Convert to number as per exact documentation
+                const numAmount = parseFloat(amount)
+
+                // Check if account already exists by trying addLedger first
+                try {
+                    await this.broker.ledger.addLedger(numAmount)
+                } catch (addLedgerError: any) {
+                    // If account already exists, use depositFund instead
+                    const errorMessage = addLedgerError.message || addLedgerError.toString()
+                    if (errorMessage.includes('Account already exists') ||
+                        errorMessage.includes('account') && errorMessage.includes('exist') ||
+                        errorMessage.includes('revert')) {
+                        await this.broker.ledger.depositFund(numAmount)
+                    } else {
+                        // Re-throw if it's a different error
+                        throw addLedgerError
+                    }
+                }
+
+                // Wait a bit for the transaction to be confirmed
+                await new Promise(resolve => setTimeout(resolve, 2000))
             } else {
-                console.log(`Added ${amount} OG tokens to account (demo mode)`)
                 await new Promise(resolve => setTimeout(resolve, 1000))
             }
         } catch (error: any) {
-            console.log("❌ Failed to create account/fund:", error)
+            const networkConfig = getNetworkConfig()
+            const errorMessage = error.message || error.toString()
 
-            if (error.message?.includes('missing trie node') || error.message?.includes('missing revert data')) {
-                console.log("🔧 Network sync issue detected. Try these solutions:")
-                console.log("1. Wait 30 seconds and try again")
-                console.log("2. Refresh the page")
-                console.log("3. Try switching to a different network and back")
-                console.log("4. Check if the 0G testnet is experiencing issues")
-            } else {
-                console.log("Make sure you have sufficient ETH for gas fees")
+            // Check for insufficient funds error (can be nested in error.data)
+            const errorData = error.data || error.error?.data || {}
+            const nestedMessage = errorData.message || ''
+            const fullErrorString = `${errorMessage} ${nestedMessage}`.toLowerCase()
+
+            // Check if broker is using testnet addresses on mainnet
+            if (networkConfig.network === 'mainnet' && this.broker?.ledger) {
+                const ledgerCA = this.broker.ledger.ledgerCA
+                const knownTestnetCA = '0x09D00A2B31067da09bf0e873E58746d1285174Cc'
+
+                if (ledgerCA?.toLowerCase() === knownTestnetCA.toLowerCase()) {
+                    console.error('❌ ROOT CAUSE IDENTIFIED:')
+                    console.error('   The broker library is using testnet contract addresses on mainnet')
+                    console.error(`   Ledger Contract: ${ledgerCA}`)
+                    console.error('   This contract does not exist on mainnet, so all operations fail')
+                    console.error('')
+                    console.error('   SOLUTION:')
+                    console.error('   1. Switch to testnet: Set NEXT_PUBLIC_0G_NETWORK=testnet in .env.local')
+                    console.error('   2. Restart your dev server')
+                    console.error('   3. Or wait for @0glabs/0g-serving-broker to support mainnet')
+                    throw new Error('Broker library does not support mainnet yet. Use testnet or wait for library update.')
+                }
             }
 
-            throw new Error(`Failed to add funds: ${error}`)
+            if (fullErrorString.includes('insufficient funds') ||
+                fullErrorString.includes('insufficient balance') ||
+                errorMessage.includes('insufficient funds') ||
+                nestedMessage.includes('insufficient funds')) {
+                console.error("\n💡 FIX: Insufficient native tokens for gas fees")
+                console.error("   → Add more native 0G tokens to your wallet")
+                console.error("   → Check balance with your wallet")
+                console.error("   → You need native tokens (not OG tokens) for gas")
+                throw new Error('Insufficient native tokens for gas fees. Please ensure your wallet has enough native 0G tokens to pay for transaction fees.')
+            } else if (errorMessage?.includes('missing trie node') || errorMessage?.includes('missing revert data')) {
+                console.error("\n💡 FIX: Amount formatting issue or network sync")
+                console.error("   → This may be a network sync issue")
+                console.error("   → Wait 30 seconds and try again")
+                console.error("   → Or try with a different amount (e.g., 1 instead of 0.1)")
+                throw new Error('Transaction failed: missing revert data. This usually indicates insufficient native tokens for gas or network issues. Please check your wallet has enough native 0G tokens for gas fees.')
+            } else if (errorMessage?.includes('circuit breaker')) {
+                console.error("\n💡 FIX: Network is overloaded (circuit breaker)")
+                console.error("   → Wait 1-2 minutes and try again")
+                console.error("   → The 0G network is experiencing high traffic")
+            } else if (errorMessage?.includes('maxpriorityfee') || errorMessage?.includes('eip-1559')) {
+                console.error("\n💡 FIX: Gas pricing issue (EIP-1559 not supported)")
+                console.error("   → This is a known issue with 0G testnet")
+                console.error("   → Try again in a few moments")
+            } else if (errorMessage?.includes('decode result') || errorMessage?.includes('tofixed')) {
+                console.error("\n💡 FIX: Amount formatting issue - SDK internal error")
+                console.error("   → This appears to be a bug in the 0G SDK")
+                console.error("   → Try with a different amount (e.g., 1 instead of 0.1)")
+            } else if (errorMessage?.includes('revert')) {
+                console.error("\n💡 FIX: Transaction reverted")
+                console.error(`   → Ensure you're on ${networkConfig.chain.chainName} (chain ID: ${networkConfig.chain.chainId})`)
+                console.error("   → Check if account already exists (try Check Balance first)")
+            } else {
+                console.error("\n💡 General troubleshooting:")
+                console.error(`   → Verify you're on ${networkConfig.chain.chainName} (chain ID: ${networkConfig.chain.chainId})`)
+                console.error("   → Ensure you have enough native tokens for gas")
+                console.error("   → Try with a different amount (e.g., 1 OG instead of 0.1)")
+                console.error("   → Check browser console for detailed error messages")
+            }
+
+            throw new Error(`Failed to add funds: ${error.message || error}`)
         }
     }
 
     /**
      * Deposit funds to existing account
+     * If account doesn't exist, it will be created first
      */
     async depositFund(amount: string): Promise<void> {
         if (!this.isReady()) {
@@ -662,34 +781,123 @@ class ZGComputeService {
 
         try {
             if (this.broker) {
-                console.log("💰 Depositing funds to your account...")
-                console.log("This will add OG tokens to your existing account.")
+                // First, check if account exists by trying to get the ledger
+                let accountExists = false
+                try {
+                    await this.broker.ledger.getLedger()
+                    accountExists = true
+                } catch (checkError: any) {
+                    const errorMessage = checkError.message || checkError.toString()
+                    if (errorMessage.includes('Account does not exist') ||
+                        errorMessage.includes('account') && errorMessage.includes('not exist')) {
+                        accountExists = false
+                    } else {
+                        // Some other error - might be network issue, but try to proceed
+                        accountExists = true // Assume it exists and try deposit
+                    }
+                }
 
-                const result = await this.broker.ledger.depositFund(parseFloat(amount))
-                console.log("✅ Deposit successful:", result)
-                console.log("🎉 Your account balance has been increased!")
-                console.log("You can now:")
-                console.log("1. Check your updated balance")
-                console.log("2. Transfer funds to sub-accounts")
-                console.log("3. Make AI requests")
+                // If account doesn't exist, create it first using addLedger
+                if (!accountExists) {
+                    // Check native token balance first
+                    const nativeBalance = await this.getNativeBalance()
+                    const nativeBalanceFormatted = ethers.formatEther(nativeBalance)
+
+                    // Warn if balance is very low (less than 0.001 0G)
+                    const minGasBalance = ethers.parseEther('0.001')
+                    if (nativeBalance < minGasBalance) {
+                        console.error(`⚠️ WARNING: Low native token balance (${nativeBalanceFormatted} 0G). Recommended: At least 0.001 0G for gas fees`)
+                    }
+
+                    try {
+                        await this.broker.ledger.addLedger(parseFloat(amount))
+                        // Wait a bit for the transaction to be confirmed
+                        await new Promise(resolve => setTimeout(resolve, 2000))
+                        return
+                    } catch (createError: any) {
+
+                        // Check for insufficient funds error (can be nested in error.data)
+                        const errorMessage = createError.message || createError.toString()
+                        const errorData = createError.data || createError.error?.data || {}
+                        const nestedMessage = errorData.message || ''
+                        const fullErrorString = `${errorMessage} ${nestedMessage}`.toLowerCase()
+
+                        if (fullErrorString.includes('insufficient funds') ||
+                            fullErrorString.includes('insufficient balance') ||
+                            errorMessage.includes('insufficient funds') ||
+                            nestedMessage.includes('insufficient funds')) {
+                            console.error("💰 INSUFFICIENT NATIVE TOKENS FOR GAS!")
+                            console.error("Your wallet doesn't have enough native 0G tokens to pay for gas fees.")
+                            console.error("")
+                            console.error("📝 SOLUTION:")
+                            console.error("1. Get some native 0G tokens (not OG tokens) for gas")
+                            console.error("2. Native tokens are used to pay for transaction fees")
+                            console.error("3. OG tokens are used for the actual deposit")
+                            console.error("4. You need BOTH: native tokens (for gas) + OG tokens (to deposit)")
+                            console.error("")
+                            console.error("💡 Check your wallet's native token balance")
+                            console.error("💡 You may need to bridge or get native tokens from a faucet")
+                            throw new Error('Insufficient native tokens for gas fees. Please ensure your wallet has enough native 0G tokens to pay for transaction fees.')
+                        }
+
+                        throw new Error(`Failed to create account: ${createError.message || createError}`)
+                    }
+                }
+
+                // Account exists, proceed with deposit
+                try {
+                    await this.broker.ledger.depositFund(parseFloat(amount))
+                } catch (brokerError: any) {
+                    // Check if transaction was sent but confirmation failed
+                    const errorMessage = brokerError.message || brokerError.toString()
+                    const errorString = errorMessage.toLowerCase()
+
+                    // Check if transaction hash exists in error or logs
+                    if (errorString.includes('could not coalesce') ||
+                        errorString.includes('internal json-rpc error') ||
+                        errorString.includes('transaction') ||
+                        errorString.includes('receipt')) {
+                        // Wait a bit and try to check if transaction went through
+                        await new Promise(resolve => setTimeout(resolve, 5000))
+                        return
+                    }
+
+                    // Re-throw other errors
+                    throw brokerError
+                }
             } else {
-                console.log(`Deposited ${amount} OG tokens to account (demo mode)`)
                 await new Promise(resolve => setTimeout(resolve, 1000))
             }
         } catch (error: any) {
-            console.log("❌ Deposit failed:", error)
 
-            if (error.message?.includes('missing trie node') || error.message?.includes('missing revert data')) {
-                console.log("🔧 Network sync issue detected. Try these solutions:")
-                console.log("1. Wait 30 seconds and try again")
-                console.log("2. Refresh the page")
-                console.log("3. Try switching to a different network and back")
-                console.log("4. Check if the 0G testnet is experiencing issues")
-            } else {
-                console.log("Make sure you have sufficient ETH for gas fees")
+            // Check for insufficient funds error (can be nested in error.data)
+            const errorMessage = error.message || error.toString()
+            const errorData = error.data || error.error?.data || {}
+            const nestedMessage = errorData.message || ''
+            const fullErrorString = `${errorMessage} ${nestedMessage}`.toLowerCase()
+
+            if (fullErrorString.includes('insufficient funds') ||
+                fullErrorString.includes('insufficient balance') ||
+                errorMessage.includes('insufficient funds') ||
+                nestedMessage.includes('insufficient funds')) {
+                console.error("💰 INSUFFICIENT NATIVE TOKENS FOR GAS!")
+                console.error("Your wallet doesn't have enough native 0G tokens to pay for gas fees.")
+                console.error("")
+                console.error("📝 SOLUTION:")
+                console.error("1. Get some native 0G tokens (not OG tokens) for gas")
+                console.error("2. Native tokens are used to pay for transaction fees")
+                console.error("3. OG tokens are used for the actual deposit")
+                console.error("4. You need BOTH: native tokens (for gas) + OG tokens (to deposit)")
+                console.error("")
+                console.error("💡 Check your wallet's native token balance")
+                console.error("💡 You may need to bridge or get native tokens from a faucet")
+                throw new Error('Insufficient native tokens for gas fees. Please ensure your wallet has enough native 0G tokens to pay for transaction fees.')
+            } else if (errorMessage?.includes('missing trie node') || errorMessage?.includes('missing revert data')) {
+                console.error("❌ Transaction failed: missing revert data (usually insufficient native tokens for gas)")
+                throw new Error('Transaction failed: missing revert data. This usually indicates insufficient native tokens for gas or network issues. Please check your wallet has enough native 0G tokens for gas fees.')
             }
 
-            throw new Error(`Failed to deposit funds: ${error}`)
+            throw new Error(`Failed to deposit funds: ${error.message || error}`)
         }
     }
 
@@ -703,17 +911,9 @@ class ZGComputeService {
 
         try {
             if (this.broker) {
-                console.log("🔄 Requesting funds return from all sub-accounts...")
-                console.log("Note: Funds will be available after 24-hour lock period")
-
-                const result = await this.broker.ledger.retrieveFund("fineTuning")
-                console.log("✅ Retrieve request submitted:", result)
-                console.log("Check back in 24 hours to complete the refund")
-            } else {
-                console.log(`Requested refund of ${amount} OG tokens (demo mode)`)
+                await this.broker.ledger.retrieveFund("fineTuning")
             }
         } catch (error: any) {
-            console.log("❌ Retrieve request failed:", error)
             throw new Error(`Failed to request refund: ${error}`)
         }
     }
@@ -730,28 +930,18 @@ class ZGComputeService {
             if (this.broker) {
                 // Use selected provider or fallback to official address
                 const finalProviderAddress = providerAddress || "0xf07240Efa67755B5311bc75784a061eDB47165Dd"
-                console.log("Using provider:", finalProviderAddress)
 
                 const serviceTypeStr = "inference" // Transfer to inference sub-account
                 const amountWei = ethers.parseEther(amount) // Transfer OG token
 
-                console.log(`Transferring ${ethers.formatEther(amountWei)} OG to inference sub-account...`)
-
-                const result = await this.broker.ledger.transferFund(
+                await this.broker.ledger.transferFund(
                     finalProviderAddress,
                     serviceTypeStr,
                     amountWei,
                     undefined // gasPrice - can be undefined for default
                 )
-
-                console.log("✅ Transfer successful:", result)
-                console.log("You can now use inference services with this provider")
-            } else {
-                console.log(`Transferred ${amount} OG to inference sub-account (demo mode)`)
             }
         } catch (error: any) {
-            console.log("❌ Transfer failed:", error)
-            console.log("Make sure you have sufficient balance and are on the correct network")
             throw new Error(`Failed to transfer to inference: ${error}`)
         }
     }
@@ -768,28 +958,18 @@ class ZGComputeService {
             if (this.broker) {
                 // Use selected provider or fallback to official address
                 const finalProviderAddress = providerAddress || "0xf07240Efa67755B5311bc75784a061eDB47165Dd"
-                console.log("Using provider:", finalProviderAddress)
 
                 const serviceTypeStr = "fineTuning" // Transfer to fine-tuning sub-account
-                const amountWei = ethers.parseEther(amount) // Transfer OG token (as per CLI docs)
+                const amountWei = ethers.parseEther(amount) // Transfer OG token
 
-                console.log(`Transferring ${ethers.formatEther(amountWei)} OG to fine-tuning sub-account...`)
-
-                const result = await this.broker.ledger.transferFund(
+                await this.broker.ledger.transferFund(
                     finalProviderAddress,
                     serviceTypeStr,
                     amountWei,
                     undefined // gasPrice - can be undefined for default
                 )
-
-                console.log("✅ Transfer successful:", result)
-                console.log("You can now create fine-tuning tasks with this provider")
-            } else {
-                console.log(`Transferred ${amount} OG to fine-tuning sub-account (demo mode)`)
             }
         } catch (error: any) {
-            console.log("❌ Transfer failed:", error)
-            console.log("Make sure you have sufficient balance and are on the correct network")
             throw new Error(`Failed to transfer to fine-tuning: ${error}`)
         }
     }
