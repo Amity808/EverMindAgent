@@ -75,15 +75,22 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
      */
     async createResearchSession(researchType: string): Promise<string> {
         try {
-            console.log('🔗 Creating research session on blockchain...')
-
+            // Check native token balance before attempting transaction
+            const address = await this.signer.getAddress()
+            const nativeBalance = await this.provider.getBalance(address)
             const storageFee = ethers.parseEther('0.001') // 0.001 ETH storage fee
+            const minGasBalance = ethers.parseEther('0.0001') // Minimum for gas
+
+            if (nativeBalance < storageFee + minGasBalance) {
+                const balanceFormatted = ethers.formatEther(nativeBalance)
+                const requiredFormatted = ethers.formatEther(storageFee + minGasBalance)
+                throw new Error(`Insufficient native tokens. Required: ${requiredFormatted} (0.001 for storage + gas), Have: ${balanceFormatted}`)
+            }
 
             const tx = await this.contract.createResearchSession(researchType, {
                 value: storageFee
             })
 
-            console.log('⏳ Transaction submitted:', tx.hash)
             const receipt = await tx.wait()
 
             // Extract session ID from event
@@ -99,12 +106,36 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
             if (event) {
                 const parsed = this.contract.interface.parseLog(event)
                 const sessionId = parsed?.args.sessionId.toString()
-                console.log('✅ Research session created:', sessionId)
                 return sessionId
             }
 
             throw new Error('Failed to extract session ID from transaction')
-        } catch (error) {
+        } catch (error: any) {
+            const errorMessage = error.message || error.toString()
+            const errorData = error.data || error.error?.data || {}
+            const nestedMessage = errorData.message || ''
+            const fullErrorString = `${errorMessage} ${nestedMessage}`.toLowerCase()
+
+            // Check for insufficient funds errors
+            if (fullErrorString.includes('insufficient') ||
+                errorMessage.includes('insufficient') ||
+                nestedMessage.includes('insufficient')) {
+                console.error('💰 INSUFFICIENT NATIVE TOKENS FOR RESEARCH SESSION')
+                console.error('You need native tokens (not OG tokens) to pay for:')
+                console.error('1. Storage fee: 0.001 native tokens')
+                console.error('2. Gas fees: ~0.0001 native tokens')
+                throw new Error('Insufficient native tokens for research session. Please ensure your wallet has enough native tokens for the storage fee (0.001) and gas fees.')
+            }
+
+            // Check for missing revert data (usually means insufficient funds)
+            if (errorMessage?.includes('missing revert data') ||
+                errorMessage?.includes('estimateGas') ||
+                error.code === 'CALL_EXCEPTION') {
+                console.error('❌ Transaction failed: missing revert data')
+                console.error('This usually means insufficient native tokens for gas fees')
+                throw new Error('Transaction failed: insufficient native tokens for gas fees. Please ensure your wallet has enough native tokens (0.001 for storage + gas fees).')
+            }
+
             console.error('❌ Failed to create research session:', error)
             throw new Error(`Failed to create research session: ${error}`)
         }
@@ -119,7 +150,15 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
      */
     async addResearchQuery(sessionId: string, query: string, context: string): Promise<string> {
         try {
-            console.log('📝 Adding research query to blockchain...')
+            // Check native token balance for gas
+            const address = await this.signer.getAddress()
+            const nativeBalance = await this.provider.getBalance(address)
+            const minGasBalance = ethers.parseEther('0.0001')
+
+            if (nativeBalance < minGasBalance) {
+                const balanceFormatted = ethers.formatEther(nativeBalance)
+                throw new Error(`Insufficient native tokens for gas. Required: ~0.0001, Have: ${balanceFormatted}`)
+            }
 
             const tx = await this.contract.addResearchQuery(sessionId, query, context)
             const receipt = await tx.wait()
@@ -137,12 +176,20 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
             if (event) {
                 const parsed = this.contract.interface.parseLog(event)
                 const queryId = parsed?.args.queryId.toString()
-                console.log('✅ Research query added:', queryId)
                 return queryId
             }
 
             throw new Error('Failed to extract query ID from transaction')
-        } catch (error) {
+        } catch (error: any) {
+            const errorMessage = error.message || error.toString()
+
+            if (errorMessage.includes('insufficient') ||
+                errorMessage.includes('missing revert data') ||
+                error.code === 'CALL_EXCEPTION') {
+                console.error('❌ Failed to add query: insufficient native tokens for gas')
+                throw new Error('Insufficient native tokens for gas fees. Please ensure your wallet has enough native tokens.')
+            }
+
             console.error('❌ Failed to add research query:', error)
             throw new Error(`Failed to add research query: ${error}`)
         }
@@ -160,7 +207,15 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
         responseData: ResearchData
     ): Promise<void> {
         try {
-            console.log('💾 Storing research response...')
+            // Check native token balance for gas
+            const address = await this.signer.getAddress()
+            const nativeBalance = await this.provider.getBalance(address)
+            const minGasBalance = ethers.parseEther('0.0001')
+
+            if (nativeBalance < minGasBalance) {
+                const balanceFormatted = ethers.formatEther(nativeBalance)
+                throw new Error(`Insufficient native tokens for gas. Required: ~0.0001, Have: ${balanceFormatted}`)
+            }
 
             // Upload to 0G Storage
             const storageResult: StorageUploadResult = await zgStorageService.uploadResearchData(
@@ -182,15 +237,16 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
             )
 
             await tx.wait()
+        } catch (error: any) {
+            const errorMessage = error.message || error.toString()
 
-            console.log('✅ Research response stored:', {
-                sessionId,
-                queryId,
-                storageHash: storageResult.hash,
-                verificationHash,
-                transactionHash: storageResult.transactionHash
-            })
-        } catch (error) {
+            if (errorMessage.includes('insufficient') ||
+                errorMessage.includes('missing revert data') ||
+                error.code === 'CALL_EXCEPTION') {
+                console.error('❌ Failed to store response: insufficient native tokens for gas')
+                throw new Error('Insufficient native tokens for gas fees. Please ensure your wallet has enough native tokens.')
+            }
+
             console.error('❌ Failed to store research response:', error)
             throw new Error(`Failed to store research response: ${error}`)
         }
@@ -202,13 +258,28 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
      */
     async completeResearchSession(sessionId: string): Promise<void> {
         try {
-            console.log('🏁 Completing research session...')
+            // Check native token balance for gas
+            const address = await this.signer.getAddress()
+            const nativeBalance = await this.provider.getBalance(address)
+            const minGasBalance = ethers.parseEther('0.0001')
+
+            if (nativeBalance < minGasBalance) {
+                const balanceFormatted = ethers.formatEther(nativeBalance)
+                throw new Error(`Insufficient native tokens for gas. Required: ~0.0001, Have: ${balanceFormatted}`)
+            }
 
             const tx = await this.contract.completeResearchSession(sessionId)
             await tx.wait()
+        } catch (error: any) {
+            const errorMessage = error.message || error.toString()
 
-            console.log('✅ Research session completed:', sessionId)
-        } catch (error) {
+            if (errorMessage.includes('insufficient') ||
+                errorMessage.includes('missing revert data') ||
+                error.code === 'CALL_EXCEPTION') {
+                console.error('❌ Failed to complete session: insufficient native tokens for gas')
+                throw new Error('Insufficient native tokens for gas fees. Please ensure your wallet has enough native tokens.')
+            }
+
             console.error('❌ Failed to complete research session:', error)
             throw new Error(`Failed to complete research session: ${error}`)
         }
@@ -234,7 +305,6 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
                 isActive: session.isActive
             }
         } catch (error) {
-            console.error('❌ Failed to get research session:', error)
             throw new Error(`Failed to get research session: ${error}`)
         }
     }
@@ -257,7 +327,6 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
                 hasResponse: query.hasResponse
             }
         } catch (error) {
-            console.error('❌ Failed to get research query:', error)
             throw new Error(`Failed to get research query: ${error}`)
         }
     }
@@ -288,7 +357,6 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
                 fullData
             }
         } catch (error) {
-            console.error('❌ Failed to get research response:', error)
             throw new Error(`Failed to get research response: ${error}`)
         }
     }
@@ -303,7 +371,6 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
             const sessions = await this.contract.getResearcherSessions(researcher)
             return sessions.map((id: any) => id.toString())
         } catch (error) {
-            console.error('❌ Failed to get researcher sessions:', error)
             throw new Error(`Failed to get researcher sessions: ${error}`)
         }
     }
@@ -319,7 +386,6 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
         try {
             return await this.contract.verifyResponse(sessionId, queryId, responseData)
         } catch (error) {
-            console.error('❌ Failed to verify response:', error)
             return false
         }
     }
@@ -333,7 +399,6 @@ export class ResearchHistoryService implements BlockchainResearchHistory {
             const balance = await this.contract.getContractBalance()
             return ethers.formatEther(balance)
         } catch (error) {
-            console.error('❌ Failed to get contract balance:', error)
             throw new Error(`Failed to get contract balance: ${error}`)
         }
     }

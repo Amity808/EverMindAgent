@@ -704,9 +704,16 @@ class ZGComputeService {
             const errorMessage = error.message || error.toString()
 
             // Check for insufficient funds error (can be nested in error.data)
+            // The error structure is: { code: -32603, data: { code: -32000, message: 'insufficient funds for transfer' } }
             const errorData = error.data || error.error?.data || {}
             const nestedMessage = errorData.message || ''
-            const fullErrorString = `${errorMessage} ${nestedMessage}`.toLowerCase()
+            const nestedCode = errorData.code || ''
+
+            // Build comprehensive error string checking all possible locations
+            const fullErrorString = `${errorMessage} ${nestedMessage} ${nestedCode}`.toLowerCase()
+
+            // Also check if the error code indicates insufficient funds
+            const isInsufficientFundsCode = nestedCode === -32000 || nestedCode === '-32000'
 
             // Check if broker is using testnet addresses on mainnet
             if (networkConfig.network === 'mainnet' && this.broker?.ledger) {
@@ -727,21 +734,28 @@ class ZGComputeService {
                 }
             }
 
+            // Check for insufficient funds FIRST (before missing revert data)
+            // This is the actual root cause - the error shows "insufficient funds for transfer"
             if (fullErrorString.includes('insufficient funds') ||
                 fullErrorString.includes('insufficient balance') ||
+                fullErrorString.includes('insufficient funds for transfer') ||
                 errorMessage.includes('insufficient funds') ||
-                nestedMessage.includes('insufficient funds')) {
+                nestedMessage.includes('insufficient funds') ||
+                nestedMessage.includes('insufficient funds for transfer') ||
+                isInsufficientFundsCode) {
                 console.error("\n💡 FIX: Insufficient native tokens for gas fees")
-                console.error("   → Add more native 0G tokens to your wallet")
-                console.error("   → Check balance with your wallet")
-                console.error("   → You need native tokens (not OG tokens) for gas")
-                throw new Error('Insufficient native tokens for gas fees. Please ensure your wallet has enough native 0G tokens to pay for transaction fees.')
+                console.error("   → Your wallet has 0 native tokens (shown as 'token: 0' in explorer)")
+                console.error("   → You need native 0G tokens (not OG tokens) to pay for gas")
+                console.error("   → Recommended: At least 0.001 native tokens for gas fees")
+                console.error("   → Get native tokens from faucet, bridge, or exchange")
+                throw new Error('Insufficient native tokens for gas fees. Your wallet has 0 native tokens. Please add native 0G tokens (not OG tokens) to pay for transaction fees.')
             } else if (errorMessage?.includes('missing trie node') || errorMessage?.includes('missing revert data')) {
-                console.error("\n💡 FIX: Amount formatting issue or network sync")
-                console.error("   → This may be a network sync issue")
-                console.error("   → Wait 30 seconds and try again")
-                console.error("   → Or try with a different amount (e.g., 1 instead of 0.1)")
-                throw new Error('Transaction failed: missing revert data. This usually indicates insufficient native tokens for gas or network issues. Please check your wallet has enough native 0G tokens for gas fees.')
+                // Missing revert data often means insufficient funds, but we couldn't detect it explicitly
+                console.error("\n💡 FIX: Transaction failed (likely insufficient native tokens)")
+                console.error("   → Check your wallet has native tokens (not OG tokens) for gas")
+                console.error("   → Your explorer shows: balance 7.271 OG, token 0 native")
+                console.error("   → You need native tokens for gas fees")
+                throw new Error('Transaction failed: missing revert data. This usually indicates insufficient native tokens for gas. Please ensure your wallet has enough native 0G tokens (not OG tokens) for gas fees.')
             } else if (errorMessage?.includes('circuit breaker')) {
                 console.error("\n💡 FIX: Network is overloaded (circuit breaker)")
                 console.error("   → Wait 1-2 minutes and try again")
@@ -869,32 +883,39 @@ class ZGComputeService {
                 await new Promise(resolve => setTimeout(resolve, 1000))
             }
         } catch (error: any) {
-
             // Check for insufficient funds error (can be nested in error.data)
+            // The error structure is: { code: -32603, data: { code: -32000, message: 'insufficient funds for transfer' } }
             const errorMessage = error.message || error.toString()
             const errorData = error.data || error.error?.data || {}
             const nestedMessage = errorData.message || ''
-            const fullErrorString = `${errorMessage} ${nestedMessage}`.toLowerCase()
+            const nestedCode = errorData.code || ''
+
+            // Build comprehensive error string checking all possible locations
+            const fullErrorString = `${errorMessage} ${nestedMessage} ${nestedCode}`.toLowerCase()
+
+            // Also check if the error code indicates insufficient funds (-32000)
+            const isInsufficientFundsCode = nestedCode === -32000 || nestedCode === '-32000' || nestedCode === -32603 || nestedCode === '-32603'
 
             if (fullErrorString.includes('insufficient funds') ||
                 fullErrorString.includes('insufficient balance') ||
+                fullErrorString.includes('insufficient funds for transfer') ||
                 errorMessage.includes('insufficient funds') ||
-                nestedMessage.includes('insufficient funds')) {
-                console.error("💰 INSUFFICIENT NATIVE TOKENS FOR GAS!")
-                console.error("Your wallet doesn't have enough native 0G tokens to pay for gas fees.")
-                console.error("")
-                console.error("📝 SOLUTION:")
-                console.error("1. Get some native 0G tokens (not OG tokens) for gas")
-                console.error("2. Native tokens are used to pay for transaction fees")
-                console.error("3. OG tokens are used for the actual deposit")
-                console.error("4. You need BOTH: native tokens (for gas) + OG tokens (to deposit)")
-                console.error("")
-                console.error("💡 Check your wallet's native token balance")
-                console.error("💡 You may need to bridge or get native tokens from a faucet")
-                throw new Error('Insufficient native tokens for gas fees. Please ensure your wallet has enough native 0G tokens to pay for transaction fees.')
+                nestedMessage.includes('insufficient funds') ||
+                nestedMessage.includes('insufficient funds for transfer') ||
+                isInsufficientFundsCode) {
+                console.error("\n💡 FIX: Insufficient native tokens for gas fees")
+                console.error("   → Your wallet has 0 native tokens (explorer shows: token 0)")
+                console.error("   → You have 7.271 OG tokens, but need native tokens for gas")
+                console.error("   → Native tokens ≠ OG tokens - you need BOTH:")
+                console.error("     • OG tokens: for deposits (you have 7.271)")
+                console.error("     • Native tokens: for gas fees (you have 0)")
+                console.error("   → Get native tokens from faucet, bridge, or exchange")
+                throw new Error('Insufficient native tokens for gas fees. Your wallet has 0 native tokens. Please add native 0G tokens (not OG tokens) to pay for transaction fees.')
             } else if (errorMessage?.includes('missing trie node') || errorMessage?.includes('missing revert data')) {
-                console.error("❌ Transaction failed: missing revert data (usually insufficient native tokens for gas)")
-                throw new Error('Transaction failed: missing revert data. This usually indicates insufficient native tokens for gas or network issues. Please check your wallet has enough native 0G tokens for gas fees.')
+                console.error("\n💡 FIX: Transaction failed (likely insufficient native tokens)")
+                console.error("   → Your explorer shows: balance 7.271 OG, token 0 native")
+                console.error("   → You need native tokens (not OG tokens) for gas fees")
+                throw new Error('Transaction failed: missing revert data. This usually indicates insufficient native tokens for gas. Please ensure your wallet has enough native 0G tokens (not OG tokens) for gas fees.')
             }
 
             throw new Error(`Failed to deposit funds: ${error.message || error}`)
