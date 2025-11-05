@@ -246,6 +246,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Documentation**: Check the `docs/` folder
 - **Issues**: Open an issue on GitHub
 - **Discord**: Join our community Discord
+- **X (Twitter)**: [Follow us on X](https://x.com/BMuhdsodiq41369)
 - **Email**: support@evermind.ai
 
 ---
